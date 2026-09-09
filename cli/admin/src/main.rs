@@ -3,6 +3,7 @@ use core::matches;
 use anyhow::{Context, Error};
 
 use proxmox_router::cli::{CliCommandMap, CliEnvironment, run_async_cli_command};
+use proxmox_router::RpcEnvironment;
 use proxmox_sys::fs::CreateOptions;
 
 mod acme;
