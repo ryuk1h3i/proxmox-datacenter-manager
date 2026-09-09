@@ -82,7 +82,7 @@ pub fn add_media(entry: MediaCatalogEntry, digest: Option<ConfigDigest>) -> Resu
         .insert(id.clone(), MediaCatalogConfigEntry::Media(entry))
         .is_some()
     {
-        param_bail!("id", "media entry '{id}' already exists");
+        param_bail!("id", "media entry '{}' already exists", id);
     }
 
     pdm_config::media::save_config(&config)

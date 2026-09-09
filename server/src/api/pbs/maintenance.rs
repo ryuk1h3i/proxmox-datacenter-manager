@@ -61,7 +61,7 @@ macro_rules! job_get {
     ($name:ident, $ty:ident, $method:ident) => {
         #[api(
             input: { properties: { remote: { schema: REMOTE_ID_SCHEMA }, id: { description: "Job identifier.", type: String } } },
-            returns: { description: "The requested job configuration.", type: $ty },
+            returns: { type: $ty },
             access: { permission: &Permission::Privilege(&["resource", "{remote}"], PRIV_RESOURCE_AUDIT, false) },
         )]
         /// Get a job configuration.
@@ -147,7 +147,7 @@ macro_rules! job_crud {
 
         #[api(
             input: { properties: { remote: { schema: REMOTE_ID_SCHEMA }, id: { description: "Job identifier.", type: String } } },
-            returns: { description: "Remote task identifier.", type: RemoteUpid },
+            returns: { type: RemoteUpid },
             access: { permission: &Permission::Privilege(&["resource", "{remote}"], PRIV_RESOURCE_MANAGE, false) },
         )]
         /// Run a job immediately.
@@ -199,7 +199,7 @@ pub async fn get_gc_status(remote: String, datastore: String) -> Result<PbsGcSta
             datastore: { schema: pbs_api_types::DATASTORE_SCHEMA },
         },
     },
-    returns: { description: "Remote task identifier.", type: RemoteUpid },
+    returns: { type: RemoteUpid },
     access: {
         permission: &Permission::Privilege(&["resource", "{remote}", "datastore", "{datastore}"], PRIV_RESOURCE_MANAGE, false),
     },
@@ -296,7 +296,7 @@ pub async fn set_snapshot_notes(
             snapshot: { type: PbsSnapshotRef, flatten: true },
         },
     },
-    returns: { description: "Remote task identifier.", type: RemoteUpid },
+    returns: { type: RemoteUpid },
     access: {
         permission: &Permission::Privilege(&["resource", "{remote}", "datastore", "{datastore}"], PRIV_RESOURCE_MANAGE, false),
     },
