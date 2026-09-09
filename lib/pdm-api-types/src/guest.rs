@@ -42,6 +42,7 @@ pub struct CreateQemu {
     #[serde(skip_serializing_if = "Option::is_none")]
     pub net0: Option<String>,
 
+    /// Native PVE boot-order property string.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub boot: Option<String>,
 
@@ -65,6 +66,7 @@ pub struct CreateLxc {
     #[serde(skip_serializing_if = "Option::is_none")]
     pub hostname: Option<String>,
 
+    /// Optional container description.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub description: Option<String>,
 
@@ -123,6 +125,7 @@ pub struct UpdateQemu {
     pub ide2: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub net0: Option<String>,
+    /// Native PVE boot-order property string.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub boot: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -164,6 +167,7 @@ pub struct UpdateLxc {
     pub onboot: Option<bool>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub startup: Option<String>,
+    /// Comma-separated configuration properties to delete.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub delete: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -184,6 +188,7 @@ pub struct CloneQemu {
     pub target: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub storage: Option<String>,
+    /// Target disk format.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub format: Option<String>,
     /// Optional description for the cloned VM.
@@ -203,6 +208,7 @@ pub struct CloneLxc {
     pub newid: u32,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub hostname: Option<String>,
+    /// Create a full clone instead of a linked clone.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub full: Option<bool>,
     #[serde(skip_serializing_if = "Option::is_none")]

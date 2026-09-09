@@ -30,6 +30,7 @@ pub struct PveBackupJob {
     pub all: Option<bool>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub compress: Option<String>,
+    /// Optional bandwidth limit in KiB per second.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub bwlimit: Option<u64>,
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -70,6 +71,7 @@ pub struct PveBackupJobConfig {
     pub all: Option<bool>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub compress: Option<String>,
+    /// Optional bandwidth limit in KiB per second.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub bwlimit: Option<u64>,
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -101,6 +103,7 @@ pub struct PveVzdumpRequest {
     pub mode: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub compress: Option<String>,
+    /// Optional bandwidth limit in KiB per second.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub bwlimit: Option<u64>,
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -122,6 +125,7 @@ pub struct PveReplicationJob {
     pub schedule: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub rate: Option<f64>,
+    /// Disable this replication job.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub disable: Option<bool>,
     /// Optional job comment.
@@ -142,6 +146,7 @@ pub struct PveReplicationJobConfig {
     pub schedule: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub rate: Option<f64>,
+    /// Disable this replication job.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub disable: Option<bool>,
     /// Optional job comment.
@@ -168,6 +173,7 @@ pub struct PveReplicationStatus {
     pub duration: Option<f64>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub fail_count: Option<u64>,
+    /// Error message from the previous replication run.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub error: Option<String>,
 }

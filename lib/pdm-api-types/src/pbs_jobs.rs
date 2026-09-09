@@ -13,6 +13,7 @@ pub struct PbsPruneJob {
     pub ns: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub schedule: Option<String>,
+    /// Disable this scheduled job.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub disable: Option<bool>,
     /// Optional job comment.
@@ -45,6 +46,7 @@ pub struct PbsVerifyJob {
     pub ns: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub schedule: Option<String>,
+    /// Disable this scheduled job.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub disable: Option<bool>,
     /// Optional job comment.
@@ -75,6 +77,7 @@ pub struct PbsSyncJob {
     pub owner: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub schedule: Option<String>,
+    /// Disable this scheduled job.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub disable: Option<bool>,
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -100,6 +103,7 @@ pub struct PbsGcStatus {
     /// End time of the previous garbage-collection run.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub last_run_endtime: Option<i64>,
+    /// Task identifier of the previous garbage-collection run.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub last_run_upid: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -122,6 +126,7 @@ pub struct PbsPruneRequest {
     pub keep_last: Option<u64>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub keep_hourly: Option<u64>,
+    /// Number of daily backups to retain.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub keep_daily: Option<u64>,
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -140,6 +145,7 @@ pub struct PbsPruneResult {
     pub backup_type: String,
     /// Backup group identifier.
     pub backup_id: String,
+    /// Snapshot creation time as Unix epoch.
     pub backup_time: i64,
     pub keep: bool,
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -154,6 +160,7 @@ pub struct PbsSnapshotRef {
     pub backup_type: String,
     /// Backup group identifier.
     pub backup_id: String,
+    /// Snapshot creation time as Unix epoch.
     pub backup_time: i64,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub ns: Option<String>,
