@@ -9,6 +9,7 @@ RUN apt-get update \
         equivs \
         lintian \
         make \
+        patchelf \
         wget \
     && wget -qO /usr/share/keyrings/proxmox-archive-keyring.gpg \
         https://enterprise.proxmox.com/debian/proxmox-release-trixie.gpg \

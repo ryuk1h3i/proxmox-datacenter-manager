@@ -126,7 +126,7 @@ enum RemoteUpdateTreeMsg {
 }
 
 struct UpdateTreeComponent {
-    state: LoadableComponentState<ViewState>,
+    state: LoadableComponentState<()>,
     store: TreeStore<UpdateTreeEntry>,
     selection: Selection,
     selected_entry: Option<UpdateTreeEntry>,
@@ -136,7 +136,7 @@ struct UpdateTreeComponent {
 pwt::impl_deref_mut_property!(
     UpdateTreeComponent,
     state,
-    LoadableComponentState<ViewState>
+    LoadableComponentState<()>
 );
 
 fn default_sorter(a: &UpdateTreeEntry, b: &UpdateTreeEntry) -> Ordering {

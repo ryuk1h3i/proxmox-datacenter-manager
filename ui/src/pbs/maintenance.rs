@@ -3,6 +3,7 @@ use std::pin::Pin;
 use std::rc::Rc;
 
 use anyhow::Error;
+use anyhow::{Error, bail};
 use yew::virtual_dom::{Key, VComp, VNode};
 
 use proxmox_yew_comp::{
@@ -148,8 +149,8 @@ impl LoadableComponent for DatastoreMaintenanceComp {
             .class(FlexFit)
             .gap(2)
             .padding(4)
-            .with_child(Row::new().gap(2).with_child(Container::new().class(FontColor::Muted).with_child(tr!("GC status"))).with_child(status))
-            .with_child(Row::new().gap(2).with_child(Container::new().class(FontColor::Muted).with_child(tr!("Last run"))).with_child(last_run))
+            .with_child(Row::new().gap(2).with_child(Container::new().class(FontColor::NeutralAlt).with_child(tr!("GC status"))).with_child(status))
+                .with_child(Row::new().gap(2).with_child(Container::new().class(FontColor::NeutralAlt).with_child(tr!("Last run"))).with_child(last_run))
             .with_optional_child((self.preview.data_len() > 0).then(|| {
                 Column::new()
                     .class(FlexFit)

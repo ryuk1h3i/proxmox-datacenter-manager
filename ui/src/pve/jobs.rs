@@ -21,6 +21,7 @@ use pwt::widget::{Button, ConfirmDialog, InputPanel, TabBarItem, TabPanel, Toolb
 use pdm_api_types::pve_jobs::{
     PveBackupJob, PveBackupJobConfig, PveReplicationJob, PveVzdumpRequest,
 };
+use pdm_api_types::RemoteUpid;
 
 #[derive(Clone, PartialEq, Properties)]
 pub struct PveJobsPanel {
@@ -106,6 +107,7 @@ enum BackupMsg {
     Reload,
     Remove(Key),
     Run(Key),
+    ShowTask(RemoteUpid),
 }
 
 struct BackupJobsComp {
@@ -149,6 +151,10 @@ impl LoadableComponent for BackupJobsComp {
                 ctx.link().change_view(None);
                 ctx.link().send_reload();
             }
+            BackupMsg::ShowTask(upid) => {
+                self.set_task_base_url(format!("/pve/remotes/{}/tasks", upid.remote()).into());
+                ctx.link().show_task_progress(upid.to_string());
+            }
             BackupMsg::Remove(key) => {
                 let remote = ctx.props().remote.clone();
                 let id = key.to_string();
@@ -183,10 +189,7 @@ impl LoadableComponent for BackupJobsComp {
                         notes_template: job.notes_template,
                     };
                     match crate::pdm_client().pve_run_vzdump(&remote, &request).await {
-                        Ok(upid) => {
-                            link.set_task_base_url(format!("/pve/remotes/{remote}/tasks").into());
-                            link.show_task_progress(upid.to_string());
-                        }
+                        Ok(upid) => link.send_message(BackupMsg::ShowTask(upid)),
                         Err(err) => link.show_error(tr!("Error"), err.to_string(), true),
                     }
                 });
@@ -197,10 +200,11 @@ impl LoadableComponent for BackupJobsComp {
 
     fn toolbar(&self, ctx: &LoadableComponentContext<Self>) -> Option<Html> {
         let selected = self.selection.selected_key();
+        let run_selected = selected.clone();
         Some(Toolbar::new().border_bottom(true)
             .with_child(Button::new(tr!("Add")).icon_class("fa fa-plus").on_activate(ctx.link().change_view_callback(|_| Some(JobViewState::Create))))
             .with_child(Button::new(tr!("Edit")).icon_class("fa fa-pencil").disabled(selected.is_none()).on_activate(ctx.link().change_view_callback(|_| Some(JobViewState::Edit))))
-            .with_child(Button::new(tr!("Run now")).icon_class("fa fa-play").disabled(selected.is_none()).on_activate({ let link = ctx.link().clone(); move |_| if let Some(key) = selected.clone() { link.send_message(BackupMsg::Run(key)); } }))
+            .with_child(Button::new(tr!("Run now")).icon_class("fa fa-play").disabled(selected.is_none()).on_activate({ let link = ctx.link().clone(); move |_| if let Some(key) = run_selected.clone() { link.send_message(BackupMsg::Run(key)); } }))
             .with_child(Button::new(tr!("Remove")).icon_class("fa fa-trash").disabled(selected.is_none()).on_activate(ctx.link().change_view_callback(|_| Some(JobViewState::Remove))))
             .with_flex_spacer()
             .with_child(Button::refresh(self.loading()).on_activate({ let link = ctx.link().clone(); move |_| link.send_reload() }))
@@ -248,7 +252,7 @@ fn backup_editor(remote: String, id: Option<String>, done: Callback<()>) -> Html
         .on_submit({
             let remote = remote.clone();
             let id = id.clone();
-            move |ctx| {
+            move |ctx: FormContext| {
                 let mut data = delete_empty_values(&ctx.get_submit_data(), &["id", "node", "pool", "vmid", "storage", "schedule", "mode", "compress", "bwlimit", "prune-backups", "notes-template", "mailto", "mailnotification"], true);
                 let remote = remote.clone();
                 let id = id.clone();
@@ -293,7 +297,7 @@ struct ReplicationJobs { remote: String }
 impl ReplicationJobs { fn new(remote: String) -> Self { yew::props!(Self { remote }) } }
 impl From<ReplicationJobs> for VNode { fn from(value: ReplicationJobs) -> Self { VComp::new::<LoadableComponentMaster<ReplicationJobsComp>>(Rc::new(value), None).into() } }
 
-enum ReplicationMsg { Loaded(Vec<PveReplicationJob>), Reload, Remove(Key), Run(Key) }
+enum ReplicationMsg { Loaded(Vec<PveReplicationJob>), Reload, Remove(Key), Run(Key), ShowTask(RemoteUpid) }
 struct ReplicationJobsComp { state: LoadableComponentState<JobViewState>, store: Store<PveReplicationJob>, selection: Selection, columns: Rc<Vec<DataTableHeader<PveReplicationJob>>> }
 pwt::impl_deref_mut_property!(ReplicationJobsComp, state, LoadableComponentState<JobViewState>);
 
@@ -318,12 +322,13 @@ impl LoadableComponent for ReplicationJobsComp {
         match msg {
             ReplicationMsg::Loaded(data) => self.store.set_data(data),
             ReplicationMsg::Reload => { ctx.link().change_view(None); ctx.link().send_reload(); }
+            ReplicationMsg::ShowTask(upid) => { self.set_task_base_url(format!("/pve/remotes/{}/tasks", upid.remote()).into()); ctx.link().show_task_progress(upid.to_string()); }
             ReplicationMsg::Remove(key) => { let remote = ctx.props().remote.clone(); let id = key.to_string(); let link = ctx.link().clone(); ctx.link().spawn(async move { let path = format!("/pve/remotes/{remote}/replication/{}", percent_encode_component(&id)); if let Err(err) = http_delete(path, None).await { link.show_error(tr!("Error"), err.to_string(), true); } link.send_message(ReplicationMsg::Reload); }); }
             ReplicationMsg::Run(key) => {
                 let Some(job) = self.store.read().lookup_record(&key).cloned() else { return false; };
                 let Some(node) = job.source else { ctx.link().show_error(tr!("Cannot run job"), tr!("The source node is unavailable."), true); return false; };
                 let remote = ctx.props().remote.clone(); let link = ctx.link().clone();
-                ctx.link().spawn(async move { match crate::pdm_client().pve_run_replication_job(&remote, &job.id, &node).await { Ok(upid) => { link.set_task_base_url(format!("/pve/remotes/{remote}/tasks").into()); link.show_task_progress(upid.to_string()); }, Err(err) => link.show_error(tr!("Error"), err.to_string(), true) } });
+                ctx.link().spawn(async move { match crate::pdm_client().pve_run_replication_job(&remote, &job.id, &node).await { Ok(upid) => link.send_message(ReplicationMsg::ShowTask(upid)), Err(err) => link.show_error(tr!("Error"), err.to_string(), true) } });
             }
         }
         true
@@ -331,10 +336,11 @@ impl LoadableComponent for ReplicationJobsComp {
 
     fn toolbar(&self, ctx: &LoadableComponentContext<Self>) -> Option<Html> {
         let selected = self.selection.selected_key();
+        let run_selected = selected.clone();
         Some(Toolbar::new().border_bottom(true)
             .with_child(Button::new(tr!("Add")).icon_class("fa fa-plus").on_activate(ctx.link().change_view_callback(|_| Some(JobViewState::Create))))
             .with_child(Button::new(tr!("Edit")).icon_class("fa fa-pencil").disabled(selected.is_none()).on_activate(ctx.link().change_view_callback(|_| Some(JobViewState::Edit))))
-            .with_child(Button::new(tr!("Run now")).icon_class("fa fa-play").disabled(selected.is_none()).on_activate({ let link = ctx.link().clone(); move |_| if let Some(key) = selected.clone() { link.send_message(ReplicationMsg::Run(key)); } }))
+            .with_child(Button::new(tr!("Run now")).icon_class("fa fa-play").disabled(selected.is_none()).on_activate({ let link = ctx.link().clone(); move |_| if let Some(key) = run_selected.clone() { link.send_message(ReplicationMsg::Run(key)); } }))
             .with_child(Button::new(tr!("Remove")).icon_class("fa fa-trash").disabled(selected.is_none()).on_activate(ctx.link().change_view_callback(|_| Some(JobViewState::Remove))))
             .with_flex_spacer().with_child(Button::refresh(self.loading()).on_activate({ let link = ctx.link().clone(); move |_| link.send_reload() })).into())
     }
@@ -348,7 +354,7 @@ fn replication_editor(remote: String, id: Option<String>, done: Callback<()>) ->
     let edit_id = id.clone();
     let mut window = EditWindow::new(if id.is_some() { tr!("Edit Replication Job") } else { tr!("Add Replication Job") })
         .renderer(move |_ctx| replication_input_panel(edit_id.clone()))
-        .on_submit({ let remote = remote.clone(); let id = id.clone(); move |ctx| { let data = delete_empty_values(&ctx.get_submit_data(), &["schedule", "rate", "comment"], true); let remote = remote.clone(); let id = id.clone(); async move { if let Some(id) = id { http_put(&format!("/pve/remotes/{remote}/replication/{}", percent_encode_component(&id)), Some(data)).await } else { http_post(&format!("/pve/remotes/{remote}/replication"), Some(data)).await } } } })
+        .on_submit({ let remote = remote.clone(); let id = id.clone(); move |ctx: FormContext| { let data = delete_empty_values(&ctx.get_submit_data(), &["schedule", "rate", "comment"], true); let remote = remote.clone(); let id = id.clone(); async move { if let Some(id) = id { http_put(&format!("/pve/remotes/{remote}/replication/{}", percent_encode_component(&id)), Some(data)).await } else { http_post(&format!("/pve/remotes/{remote}/replication"), Some(data)).await } } } })
         .on_done(done);
     if let Some(id) = id { window = window.loader(format!("/pve/remotes/{remote}/replication/{}/config", percent_encode_component(&id))); }
     window.into()

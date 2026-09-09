@@ -18,7 +18,7 @@ use pwt::state::Store;
 use pwt::widget::data_table::{DataTable, DataTableColumn, DataTableHeader};
 use pwt::widget::form::{Checkbox, DisplayField, Field, FormContext, Number};
 use pwt::widget::menu::{Menu, MenuButton, MenuItem};
-use pwt::widget::{ActionIcon, ConfirmDialog, InputPanel, Row, TabBarItem, TabPanel, Toolbar, Tooltip};
+use pwt::widget::{ActionIcon, Button, ConfirmDialog, InputPanel, Row, TabBarItem, TabPanel, Toolbar, Tooltip};
 
 use pdm_api_types::pbs_jobs::{PbsPruneJob, PbsSyncJob, PbsVerifyJob};
 use pdm_api_types::RemoteUpid;
@@ -79,7 +79,7 @@ fn job_actions<T>(
     link: &LoadableComponentScope<PbsJobsPanelComp>,
     kind: JobKind,
     id: &str,
-+) -> Html {
+) -> Html {
     let id = id.to_string();
     Row::new()
         .gap(1)
@@ -256,7 +256,7 @@ fn job_editor(kind: JobKind, remote: String, id: Option<String>, done: Callback<
         .on_submit({
             let remote = remote.clone();
             let id = id.clone();
-            move |ctx| {
+            move |ctx: FormContext| {
                 let data = delete_empty_values(&ctx.get_submit_data(), &["ns", "schedule", "comment", "owner", "remote-ns", "rate-in", "max-depth", "outdated-after", "keep-last", "keep-hourly", "keep-daily", "keep-weekly", "keep-monthly", "keep-yearly"], true);
                 let remote = remote.clone();
                 let id = id.clone();

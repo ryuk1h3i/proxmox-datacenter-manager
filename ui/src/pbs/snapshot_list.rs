@@ -6,7 +6,7 @@ use anyhow::{Error, bail, format_err};
 use gloo_timers::callback::Interval;
 use js_sys::Date;
 use proxmox_yew_comp::utils::render_epoch_short;
-use proxmox_yew_comp::{EditWindow, LoadableComponentScopeExt};
+use proxmox_yew_comp::{EditWindow, TaskViewer};
 use pwt::css::FontColor;
 use yew::virtual_dom::{Key, VComp, VNode};
 use yew::{Properties, html};
@@ -14,8 +14,8 @@ use yew::{Properties, html};
 use pwt::prelude::Context as PwtContext;
 use pwt::prelude::{Component, Html, tr};
 use pwt::props::{
-    ContainerBuilder, CssBorderBuilder, CssPaddingBuilder, ExtractPrimaryKey, WidgetBuilder,
-    WidgetStyleBuilder,
+    ContainerBuilder, CssBorderBuilder, CssPaddingBuilder, ExtractPrimaryKey, FieldBuilder,
+    WidgetBuilder, WidgetStyleBuilder,
 };
 use pwt::state::{Selection, TreeStore};
 use pwt::widget::data_table::{DataTable, DataTableColumn, DataTableHeader};
@@ -96,6 +96,7 @@ enum Msg {
 enum DialogState {
     Notes(PbsSnapshotRef),
     Forget(PbsSnapshotRef),
+    Task(pdm_api_types::RemoteUpid),
 }
 
 struct SnapshotListComp {
@@ -304,7 +305,13 @@ impl Component for SnapshotListComp {
                 let remote = ctx.props().remote.clone();
                 let datastore = ctx.props().datastore.clone();
                 self._async_pool.send_future(ctx.link().clone(), async move {
-                    Msg::ActionFinished(crate::pdm_client().pbs_verify_snapshot(&remote, &datastore, &snapshot).await.map(Some))
+                    Msg::ActionFinished(
+                        crate::pdm_client()
+                            .pbs_verify_snapshot(&remote, &datastore, &snapshot)
+                            .await
+                            .map(Some)
+                            .map_err(|err| format_err!("{err}")),
+                    )
                 });
                 false
             }
@@ -314,7 +321,13 @@ impl Component for SnapshotListComp {
                 let datastore = ctx.props().datastore.clone();
                 self._async_pool.send_future(ctx.link().clone(), async move {
                     let request = PbsSnapshotProtection { snapshot, protected: !protected };
-                    Msg::ActionFinished(crate::pdm_client().pbs_set_snapshot_protection(&remote, &datastore, &request).await.map(|_| None))
+                    Msg::ActionFinished(
+                        crate::pdm_client()
+                            .pbs_set_snapshot_protection(&remote, &datastore, &request)
+                            .await
+                            .map(|_| None)
+                            .map_err(|err| format_err!("{err}")),
+                    )
                 });
                 false
             }
@@ -329,10 +342,10 @@ impl Component for SnapshotListComp {
             Msg::ActionFinished(result) => {
                 match result {
                     Ok(Some(upid)) => {
-                        ctx.link().show_task_progress(upid.to_string());
+                        self.dialog = Some(DialogState::Task(upid));
                     }
                     Ok(None) => self.clear_and_reload(ctx),
-                    Err(err) => ctx.link().show_error(tr!("Error"), err.to_string(), true),
+                    Err(err) => self.load_result = Some(Err(err)),
                 }
                 true
             }
@@ -414,7 +427,12 @@ impl Component for SnapshotListComp {
                             let request = PbsSnapshotNotes { snapshot: snapshot.clone(), notes: form.read().get_field_text("notes") };
                             let remote = remote.clone();
                             let datastore = datastore.clone();
-                            async move { crate::pdm_client().pbs_set_snapshot_notes(&remote, &datastore, &request).await }
+                            async move {
+                                crate::pdm_client()
+                                    .pbs_set_snapshot_notes(&remote, &datastore, &request)
+                                    .await
+                                    .map_err(|err| format_err!("{err}"))
+                            }
                         })
                         .on_done(link.callback(|_| Msg::CloseDialog)));
                 }
@@ -429,11 +447,22 @@ impl Component for SnapshotListComp {
                             let datastore = datastore.clone();
                             let link = link.clone();
                             wasm_bindgen_futures::spawn_local(async move {
-                                let result = crate::pdm_client().pbs_forget_snapshot(&remote, &datastore, &snapshot).await.map(|_| None);
+                                let result = crate::pdm_client()
+                                    .pbs_forget_snapshot(&remote, &datastore, &snapshot)
+                                    .await
+                                    .map(|_| None)
+                                    .map_err(|err| format_err!("{err}"));
                                 link.send_message(Msg::ActionFinished(result));
                             });
                         })
                         .on_close(link.callback(|_| Msg::CloseDialog)));
+                }
+                DialogState::Task(upid) => {
+                    view.add_child(
+                        TaskViewer::new(upid.to_string())
+                            .base_url(format!("/pbs/remotes/{}/tasks", upid.remote()))
+                            .on_close(link.callback(|_| Msg::CloseDialog)),
+                    );
                 }
             }
         }
@@ -445,7 +474,8 @@ impl SnapshotListComp {
     fn selected_snapshot(&self) -> Option<(PbsSnapshotRef, bool)> {
         let key = self.selection.selected_key()?;
         let store = self.store.read();
-        let SnapshotTreeEntry::Snapshot(entry) = store.lookup_record(&key)? else { return None; };
+        let node = store.lookup_node(&key)?;
+        let SnapshotTreeEntry::Snapshot(entry) = node.record() else { return None; };
         let ns = (!self.current_namespace.is_root()).then(|| self.current_namespace.to_string());
         Some((PbsSnapshotRef {
             backup_type: entry.backup.group.ty.to_string(),

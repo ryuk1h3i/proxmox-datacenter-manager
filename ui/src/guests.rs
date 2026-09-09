@@ -33,6 +33,7 @@ use pwt::props::{
 use pwt::state::{KeyedSlabTree, PersistentState, Selection, Store, TreeStore};
 use pwt::widget::data_table::{DataTable, DataTableColumn, DataTableHeader};
 use pwt::widget::form::{Checkbox, DisplayField, Field, FormContext, Number};
+use pwt::widget::form::Combobox;
 use pwt::widget::menu::{Menu, MenuButton, MenuItem};
 use pwt::widget::{
     ActionIcon, Button, Column, Container, Fa, InputPanel, MessageBox, MessageBoxButtons, Row,

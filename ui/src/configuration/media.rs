@@ -11,6 +11,7 @@ use proxmox_yew_comp::{
     EditWindow, LoadableComponent, LoadableComponentContext, LoadableComponentMaster,
     LoadableComponentScopeExt, LoadableComponentState, http_delete, http_get, http_post, http_put,
 };
+use proxmox_yew_comp::SchemaValidation;
 
 use pwt::prelude::*;
 use pwt::state::{Selection, Store};
