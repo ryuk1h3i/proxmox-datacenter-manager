@@ -5,7 +5,7 @@ use std::net::IpAddr;
 use std::pin::Pin;
 use std::sync::OnceLock;
 
-use anyhow::{Error, bail};
+use anyhow::{Context, Error, bail};
 
 use const_format::concatcp;
 use ldap::{AdAuthenticator, LdapAuthenticator};
@@ -28,6 +28,8 @@ pub(crate) mod ldap;
 pub mod tfa;
 
 pub const TERM_PREFIX: &str = "PDMTERM";
+const ADMIN_PASSWORD_SECRET: &str = "/run/secrets/pdm-admin-password";
+const PASSWORD_STORE: &str = pdm_buildcfg::configdir!("/access/shadow.json");
 
 /// Pre-load lazy-static pre-load things like csrf & auth key
 pub fn init(use_private_key: bool) {
@@ -48,6 +50,30 @@ pub fn setup_keys() -> Result<(), Error> {
     if let Err(err) = certs::update_self_signed_cert(false) {
         bail!("unable to generate TLS certs - {err}");
     }
+    setup_admin_password()?;
+    Ok(())
+}
+
+fn setup_admin_password() -> Result<(), Error> {
+    if std::path::Path::new(PASSWORD_STORE).exists() {
+        return Ok(());
+    }
+
+    crate::acl::init();
+    pdm_config::domains::add_default_realms()?;
+
+    let password = std::fs::read_to_string(ADMIN_PASSWORD_SECRET)
+        .with_context(|| format!("unable to read Docker secret '{ADMIN_PASSWORD_SECRET}'"))?;
+    let password = password.trim_end_matches(['\r', '\n']);
+    if password.is_empty() {
+        bail!("Docker secret '{ADMIN_PASSWORD_SECRET}' is empty");
+    }
+
+    let authenticator = proxmox_auth_api::PasswordAuthenticator {
+        config_filename: PASSWORD_STORE,
+        lock_filename: pdm_buildcfg::configdir!("/access/shadow.json.lock"),
+    };
+    authenticator.store_password("admin", password, None)?;
     Ok(())
 }
 
@@ -181,9 +207,6 @@ pub(crate) fn lookup_authenticator(
     realm: &RealmRef,
 ) -> Result<Box<dyn Authenticator + Send + Sync>, Error> {
     match realm.as_str() {
-        "pam" => Ok(Box::new(proxmox_auth_api::Pam::new(
-            "proxmox-datacenter-auth",
-        ))),
         "pdm" => Ok(Box::new(proxmox_auth_api::PasswordAuthenticator {
             config_filename: pdm_buildcfg::configdir!("/access/shadow.json"),
             lock_filename: pdm_buildcfg::configdir!("/access/shadow.json.lock"),

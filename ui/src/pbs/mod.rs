@@ -22,6 +22,9 @@ mod tree;
 mod datastore;
 pub use datastore::DatastorePanel;
 
+mod jobs;
+mod maintenance;
+
 mod namespace_selector;
 
 mod node;

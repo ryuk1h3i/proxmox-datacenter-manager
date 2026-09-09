@@ -36,9 +36,11 @@ use crate::remote_tasks;
 use crate::remote_updates::get_available_updates_for_remote;
 
 mod firewall;
+mod backup;
 mod lxc;
 mod node;
 mod qemu;
+mod replication;
 mod rrddata;
 mod storage;
 pub mod tasks;
@@ -69,11 +71,14 @@ const MAIN_ROUTER: Router = Router::new()
 
 #[sortable]
 const REMOTE_SUBDIRS: SubdirMap = &sorted!([
+    ("backup", &backup::ROUTER),
+    ("vzdump", &backup::VZDUMP_ROUTER),
     ("lxc", &lxc::ROUTER),
     ("firewall", &firewall::CLUSTER_FW_ROUTER),
     ("nodes", &NODES_ROUTER),
     ("options", &OPTIONS_ROUTER),
     ("qemu", &qemu::ROUTER),
+    ("replication", &replication::ROUTER),
     ("resources", &RESOURCES_ROUTER),
     ("cluster-nextid", &NEXTID_ROUTER),
     ("cluster-status", &STATUS_ROUTER),
@@ -129,6 +134,12 @@ fn connect_to_remote(
 pub fn connect_to_remote_by_id(id: &str) -> Result<Arc<PveClient>, Error> {
     let (remotes, _) = pdm_config::remotes::config()?;
     connect_to_remote(&remotes, id)
+}
+
+/// Load remote config and create an authenticated client for PVE APIs not covered by pve-api-types.
+pub fn raw_client_to_remote_by_id(id: &str) -> Result<Box<proxmox_client::Client>, Error> {
+    let (remotes, _) = pdm_config::remotes::config()?;
+    connection::make_raw_client(get_remote(&remotes, id)?)
 }
 
 #[api(

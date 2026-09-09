@@ -1,0 +1,27 @@
+services:
+  pdm:
+    image: ${PDM_IMAGE:-ghcr.io/ryuk1h3i/proxmox-datacenter-manager:latest}
+    build:
+      context: .
+    restart: unless-stopped
+    ports:
+      - "8443:8443"
+    secrets:
+      - pdm-admin-password
+    volumes:
+      - pdm-config:/etc/proxmox-datacenter-manager
+      - pdm-state:/var/lib/proxmox-datacenter-manager
+      - pdm-cache:/var/cache/proxmox-datacenter-manager
+      - pdm-task-logs:/var/log/proxmox-datacenter-manager
+    tmpfs:
+      - /run/proxmox-datacenter-manager:mode=1770,uid=0,gid=33
+
+secrets:
+  pdm-admin-password:
+    file: ${PDM_ADMIN_PASSWORD_FILE}
+
+volumes:
+  pdm-config:
+  pdm-state:
+  pdm-cache:
+  pdm-task-logs:

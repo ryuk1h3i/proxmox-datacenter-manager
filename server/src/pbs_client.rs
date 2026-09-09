@@ -16,6 +16,15 @@ use proxmox_section_config::typed::SectionConfigData;
 use pbs_api_types::{Authid, BasicRealmInfo, Tokenname, TokennameRef, Userid};
 
 use pdm_api_types::remotes::{Remote, RemoteType};
+use pdm_api_types::pbs_jobs::{
+    PbsGcStatus, PbsPruneJob, PbsPruneRequest, PbsPruneResult, PbsSnapshotNotes,
+    PbsSnapshotProtection, PbsSnapshotRef, PbsSyncJob, PbsVerifyJob,
+};
+
+fn encode_path_segment(value: &str) -> String {
+    percent_encoding::percent_encode(value.as_bytes(), percent_encoding::NON_ALPHANUMERIC)
+        .to_string()
+}
 
 pub fn get_remote<'a>(
     config: &'a SectionConfigData<Remote>,
@@ -441,6 +450,201 @@ impl<C: HttpApiClient<Body = proxmox_http::Body>> PbsClient<C> {
             .build();
 
         Ok(self.0.get(&url).await?.expect_json()?.data)
+    }
+
+    pub async fn list_prune_jobs(&self) -> Result<Vec<PbsPruneJob>, Error> {
+        Ok(self
+            .0
+            .get("/api2/extjs/config/prune")
+            .await?
+            .expect_json()?
+            .data)
+    }
+
+    pub async fn create_prune_job(&self, job: &PbsPruneJob) -> Result<(), Error> {
+        self.0.post("/api2/extjs/config/prune", job).await?.nodata()
+    }
+
+    pub async fn get_prune_job(&self, id: &str) -> Result<PbsPruneJob, Error> {
+        let path = format!("/api2/extjs/config/prune/{}", encode_path_segment(id));
+        Ok(self.0.get(&path).await?.expect_json()?.data)
+    }
+
+    pub async fn update_prune_job(&self, id: &str, job: &PbsPruneJob) -> Result<(), Error> {
+        let path = format!("/api2/extjs/config/prune/{}", encode_path_segment(id));
+        let mut payload = serde_json::to_value(job).expect("job serializes as object");
+        payload.as_object_mut().expect("job serializes as object").remove("id");
+        self.0.put(&path, &payload).await?.nodata()
+    }
+
+    pub async fn delete_prune_job(&self, id: &str) -> Result<(), Error> {
+        let path = format!("/api2/extjs/config/prune/{}", encode_path_segment(id));
+        self.0.delete(&path).await?.nodata()
+    }
+
+    pub async fn run_prune_job(&self, id: &str) -> Result<pbs_api_types::UPID, Error> {
+        let path = format!(
+            "/api2/extjs/admin/prune/{}/run",
+            encode_path_segment(id)
+        );
+        Ok(self.0.post_without_body(&path).await?.expect_json()?.data)
+    }
+
+    pub async fn prune_datastore(
+        &self,
+        store: &str,
+        request: &PbsPruneRequest,
+    ) -> Result<Vec<PbsPruneResult>, Error> {
+        let path = format!(
+            "/api2/extjs/admin/datastore/{}/prune",
+            encode_path_segment(store)
+        );
+        Ok(self.0.post(&path, request).await?.expect_json()?.data)
+    }
+
+    pub async fn list_verify_jobs(&self) -> Result<Vec<PbsVerifyJob>, Error> {
+        Ok(self
+            .0
+            .get("/api2/extjs/config/verify")
+            .await?
+            .expect_json()?
+            .data)
+    }
+
+    pub async fn create_verify_job(&self, job: &PbsVerifyJob) -> Result<(), Error> {
+        self.0.post("/api2/extjs/config/verify", job).await?.nodata()
+    }
+
+    pub async fn get_verify_job(&self, id: &str) -> Result<PbsVerifyJob, Error> {
+        let path = format!("/api2/extjs/config/verify/{}", encode_path_segment(id));
+        Ok(self.0.get(&path).await?.expect_json()?.data)
+    }
+
+    pub async fn update_verify_job(&self, id: &str, job: &PbsVerifyJob) -> Result<(), Error> {
+        let path = format!("/api2/extjs/config/verify/{}", encode_path_segment(id));
+        let mut payload = serde_json::to_value(job).expect("job serializes as object");
+        payload.as_object_mut().expect("job serializes as object").remove("id");
+        self.0.put(&path, &payload).await?.nodata()
+    }
+
+    pub async fn delete_verify_job(&self, id: &str) -> Result<(), Error> {
+        let path = format!("/api2/extjs/config/verify/{}", encode_path_segment(id));
+        self.0.delete(&path).await?.nodata()
+    }
+
+    pub async fn run_verify_job(&self, id: &str) -> Result<pbs_api_types::UPID, Error> {
+        let path = format!(
+            "/api2/extjs/admin/verify/{}/run",
+            encode_path_segment(id)
+        );
+        Ok(self.0.post_without_body(&path).await?.expect_json()?.data)
+    }
+
+    pub async fn list_sync_jobs(&self) -> Result<Vec<PbsSyncJob>, Error> {
+        Ok(self
+            .0
+            .get("/api2/extjs/config/sync")
+            .await?
+            .expect_json()?
+            .data)
+    }
+
+    pub async fn create_sync_job(&self, job: &PbsSyncJob) -> Result<(), Error> {
+        self.0.post("/api2/extjs/config/sync", job).await?.nodata()
+    }
+
+    pub async fn get_sync_job(&self, id: &str) -> Result<PbsSyncJob, Error> {
+        let path = format!("/api2/extjs/config/sync/{}", encode_path_segment(id));
+        Ok(self.0.get(&path).await?.expect_json()?.data)
+    }
+
+    pub async fn update_sync_job(&self, id: &str, job: &PbsSyncJob) -> Result<(), Error> {
+        let path = format!("/api2/extjs/config/sync/{}", encode_path_segment(id));
+        let mut payload = serde_json::to_value(job).expect("job serializes as object");
+        payload.as_object_mut().expect("job serializes as object").remove("id");
+        self.0.put(&path, &payload).await?.nodata()
+    }
+
+    pub async fn delete_sync_job(&self, id: &str) -> Result<(), Error> {
+        let path = format!("/api2/extjs/config/sync/{}", encode_path_segment(id));
+        self.0.delete(&path).await?.nodata()
+    }
+
+    pub async fn run_sync_job(&self, id: &str) -> Result<pbs_api_types::UPID, Error> {
+        let path = format!(
+            "/api2/extjs/admin/sync/{}/run",
+            encode_path_segment(id)
+        );
+        Ok(self.0.post_without_body(&path).await?.expect_json()?.data)
+    }
+
+    pub async fn datastore_gc_status(&self, store: &str) -> Result<PbsGcStatus, Error> {
+        let path = format!(
+            "/api2/extjs/admin/datastore/{}/gc",
+            encode_path_segment(store)
+        );
+        Ok(self.0.get(&path).await?.expect_json()?.data)
+    }
+
+    pub async fn run_datastore_gc(&self, store: &str) -> Result<pbs_api_types::UPID, Error> {
+        let path = format!(
+            "/api2/extjs/admin/datastore/{}/gc",
+            encode_path_segment(store)
+        );
+        Ok(self.0.post_without_body(&path).await?.expect_json()?.data)
+    }
+
+    pub async fn set_snapshot_protection(
+        &self,
+        store: &str,
+        request: &PbsSnapshotProtection,
+    ) -> Result<(), Error> {
+        let path = format!(
+            "/api2/extjs/admin/datastore/{}/protected",
+            encode_path_segment(store)
+        );
+        self.0.put(&path, request).await?.nodata()
+    }
+
+    pub async fn set_snapshot_notes(
+        &self,
+        store: &str,
+        request: &PbsSnapshotNotes,
+    ) -> Result<(), Error> {
+        let path = format!(
+            "/api2/extjs/admin/datastore/{}/notes",
+            encode_path_segment(store)
+        );
+        self.0.put(&path, request).await?.nodata()
+    }
+
+    pub async fn verify_snapshot(
+        &self,
+        store: &str,
+        snapshot: &PbsSnapshotRef,
+    ) -> Result<pbs_api_types::UPID, Error> {
+        let path = format!(
+            "/api2/extjs/admin/datastore/{}/verify",
+            encode_path_segment(store)
+        );
+        Ok(self.0.post(&path, snapshot).await?.expect_json()?.data)
+    }
+
+    pub async fn forget_snapshot(
+        &self,
+        store: &str,
+        snapshot: &PbsSnapshotRef,
+    ) -> Result<(), Error> {
+        let path = ApiPathBuilder::new(format!(
+            "/api2/extjs/admin/datastore/{}/snapshots",
+            encode_path_segment(store)
+        ))
+        .arg("backup-type", &snapshot.backup_type)
+        .arg("backup-id", &snapshot.backup_id)
+        .arg("backup-time", snapshot.backup_time)
+        .maybe_arg("ns", &snapshot.ns)
+        .build();
+        self.0.delete(&path).await?.nodata()
     }
 
     /// Read task log.

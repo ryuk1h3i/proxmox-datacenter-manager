@@ -1,0 +1,9 @@
+build
+target
+ui/target
+*.deb
+*.build
+*.buildinfo
+*.changes
+*.dsc
+*.tar.*

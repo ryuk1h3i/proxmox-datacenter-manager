@@ -20,8 +20,8 @@ use yew::virtual_dom::{Key, VComp, VNode};
 use proxmox_human_byte::HumanByte;
 use proxmox_yew_comp::utils::format_duration_human;
 use proxmox_yew_comp::{
-    LoadableComponent, LoadableComponentContext, LoadableComponentMaster, LoadableComponentScope,
-    LoadableComponentScopeExt, LoadableComponentState, rrd_value_renderer,
+    EditWindow, LoadableComponent, LoadableComponentContext, LoadableComponentMaster,
+    LoadableComponentScope, LoadableComponentScopeExt, LoadableComponentState, rrd_value_renderer,
 };
 
 use pwt::css::{AlignItems, ColorScheme, FlexFit, JustifyContent};
@@ -32,12 +32,16 @@ use pwt::props::{
 };
 use pwt::state::{KeyedSlabTree, PersistentState, Selection, Store, TreeStore};
 use pwt::widget::data_table::{DataTable, DataTableColumn, DataTableHeader};
-use pwt::widget::form::Field;
+use pwt::widget::form::{Checkbox, DisplayField, Field, FormContext, Number};
+use pwt::widget::menu::{Menu, MenuButton, MenuItem};
 use pwt::widget::{
-    ActionIcon, Button, Column, Container, Fa, MessageBox, MessageBoxButtons, Row, SegmentedButton,
-    Toolbar, Tooltip, Trigger,
+    ActionIcon, Button, Column, Container, Fa, InputPanel, MessageBox, MessageBoxButtons, Row,
+    SegmentedButton, Toolbar, Tooltip, Trigger,
 };
 
+use pdm_api_types::guest::{CreateLxc, CreateQemu};
+use pdm_api_types::media::{MediaContentType, PveDownloadUrl};
+use pdm_api_types::remotes::RemoteType;
 use pdm_api_types::RemoteUpid;
 use pdm_api_types::resource::{RemoteResources, Resource};
 use pdm_search::SearchTerm;
@@ -47,7 +51,7 @@ use crate::pve::{GuestInfo, GuestType};
 use crate::renderer::{empty_state, render_resource_name, render_status_icon, render_tree_column};
 use crate::{
     get_deep_url, get_resource_node,
-    widget::{MigrateWindow, SnapshotWindow},
+    widget::{MigrateWindow, PveNodeSelector, RemoteSelector, SnapshotWindow},
 };
 
 /// Auto-reload interval for the cross-remote resource list.
@@ -195,11 +199,19 @@ impl ExtractPrimaryKey for GuestTreeNode {
 pub enum Action {
     Start,
     Shutdown,
+    Stop,
+    Reboot,
+    Reset,
+    Suspend,
     Resume,
+    Template,
+    Delete,
 }
 
 #[derive(PartialEq)]
 pub enum ViewState {
+    CreateQemu,
+    CreateLxc,
     Confirm(Action, Key),
     /// Open the migration dialog for the given (remote, source-node, guest).
     Migrate(String, String, GuestInfo),
@@ -239,6 +251,28 @@ pub struct GuestPanelComp {
 pwt::impl_deref_mut_property!(GuestPanelComp, state, LoadableComponentState<ViewState>);
 
 impl GuestPanelComp {
+    fn create_qemu_dialog(&self, ctx: &LoadableComponentContext<Self>) -> Html {
+        EditWindow::new(tr!("Create VM"))
+            .renderer(create_qemu_input_panel)
+            .on_submit({
+                let link = ctx.link().clone();
+                move |form| create_qemu(form, link.clone())
+            })
+            .on_done(ctx.link().change_view_callback(|_| None))
+            .into()
+    }
+
+    fn create_lxc_dialog(&self, ctx: &LoadableComponentContext<Self>) -> Html {
+        EditWindow::new(tr!("Create CT"))
+            .renderer(create_lxc_input_panel)
+            .on_submit({
+                let link = ctx.link().clone();
+                move |form| create_lxc(form, link.clone())
+            })
+            .on_done(ctx.link().change_view_callback(|_| None))
+            .into()
+    }
+
     fn apply_filter(&self) {
         if self.filter.is_empty() {
             self.store.set_filter(None);
@@ -353,24 +387,59 @@ impl LoadableComponent for GuestPanelComp {
                 let link = ctx.link().clone();
                 ctx.link().spawn(async move {
                     let client = crate::pdm_client();
-                    let res = match (guest_type, action) {
-                        (GuestType::Qemu, Action::Start) => {
+                    let res = match action {
+                        Action::Start if guest_type == GuestType::Qemu => {
                             client.pve_qemu_start(&remote, Some(&node), vmid).await
                         }
-                        (GuestType::Qemu, Action::Shutdown) => {
+                        Action::Shutdown if guest_type == GuestType::Qemu => {
                             client.pve_qemu_shutdown(&remote, Some(&node), vmid).await
                         }
-                        (GuestType::Lxc, Action::Start) => {
+                        Action::Start => {
                             client.pve_lxc_start(&remote, Some(&node), vmid).await
                         }
-                        (GuestType::Lxc, Action::Shutdown) => {
+                        Action::Shutdown => {
                             client.pve_lxc_shutdown(&remote, Some(&node), vmid).await
                         }
-                        (GuestType::Qemu, Action::Resume) => {
+                        Action::Stop if guest_type == GuestType::Qemu => {
+                            client.pve_qemu_stop(&remote, Some(&node), vmid).await
+                        }
+                        Action::Stop => {
+                            client.pve_lxc_stop(&remote, Some(&node), vmid).await
+                        }
+                        Action::Reboot if guest_type == GuestType::Qemu => {
+                            client.pve_qemu_reboot(&remote, Some(&node), vmid).await
+                        }
+                        Action::Reboot => {
+                            client.pve_lxc_reboot(&remote, Some(&node), vmid).await
+                        }
+                        Action::Reset if guest_type == GuestType::Qemu => {
+                            client.pve_qemu_reset(&remote, Some(&node), vmid).await
+                        }
+                        Action::Reset => return,
+                        Action::Suspend if guest_type == GuestType::Qemu => {
+                            client.pve_qemu_suspend(&remote, Some(&node), vmid).await
+                        }
+                        Action::Suspend => {
+                            client.pve_lxc_suspend(&remote, Some(&node), vmid).await
+                        }
+                        Action::Resume if guest_type == GuestType::Qemu => {
                             client.pve_qemu_resume(&remote, Some(&node), vmid).await
                         }
-                        // LXC resume isn't exposed yet, so the UI never offers it for LXC
-                        (GuestType::Lxc, Action::Resume) => return,
+                        Action::Resume => {
+                            client.pve_lxc_resume(&remote, Some(&node), vmid).await
+                        }
+                        Action::Template if guest_type == GuestType::Qemu => {
+                            client.pve_qemu_template(&remote, Some(&node), vmid).await
+                        }
+                        Action::Template => {
+                            client.pve_lxc_template(&remote, Some(&node), vmid).await
+                        }
+                        Action::Delete if guest_type == GuestType::Qemu => {
+                            client.pve_delete_qemu(&remote, Some(&node), vmid).await
+                        }
+                        Action::Delete => {
+                            client.pve_delete_lxc(&remote, Some(&node), vmid).await
+                        }
                     };
                     match res {
                         Ok(upid) => link.send_message(Msg::ShowTask(upid)),
@@ -430,6 +499,16 @@ impl LoadableComponent for GuestPanelComp {
         Some(
             Toolbar::new()
                 .border_bottom(true)
+                .with_child(
+                    Button::new(tr!("Create VM"))
+                        .icon_class("fa fa-desktop")
+                        .on_activate(link.change_view_callback(|_| Some(ViewState::CreateQemu))),
+                )
+                .with_child(
+                    Button::new(tr!("Create CT"))
+                        .icon_class("fa fa-cube")
+                        .on_activate(link.change_view_callback(|_| Some(ViewState::CreateLxc))),
+                )
                 .with_child(
                     Field::new()
                         .value(self.filter.clone())
@@ -532,6 +611,8 @@ impl LoadableComponent for GuestPanelComp {
         view_state: &Self::ViewState,
     ) -> Option<Html> {
         match view_state {
+            ViewState::CreateQemu => Some(self.create_qemu_dialog(ctx)),
+            ViewState::CreateLxc => Some(self.create_lxc_dialog(ctx)),
             ViewState::Confirm(action, key) => {
                 let label = self
                     .store
@@ -545,7 +626,17 @@ impl LoadableComponent for GuestPanelComp {
                     Action::Shutdown => {
                         tr!("Are you sure you want to shut down guest '{0}'?", label)
                     }
+                    Action::Stop => tr!("Force stop guest '{0}'?", label),
+                    Action::Reboot => tr!("Are you sure you want to reboot guest '{0}'?", label),
+                    Action::Reset => tr!("Force reset guest '{0}'?", label),
+                    Action::Suspend => tr!("Are you sure you want to suspend guest '{0}'?", label),
                     Action::Resume => tr!("Are you sure you want to resume guest '{0}'?", label),
+                    Action::Template => {
+                        tr!("Convert guest '{0}' to a template? This cannot be undone.", label)
+                    }
+                    Action::Delete => {
+                        tr!("Permanently delete guest '{0}' and its disks?", label)
+                    }
                 };
                 let action = action.clone();
                 let key = key.clone();
@@ -604,6 +695,228 @@ impl LoadableComponent for GuestPanelComp {
             Ok(())
         })
     }
+}
+
+async fn create_qemu(
+    form_ctx: FormContext,
+    link: LoadableComponentScope<GuestPanelComp>,
+) -> Result<(), Error> {
+    let remote = form_ctx.read().get_field_text("remote");
+    let node = form_ctx.read().get_field_text("node");
+    let mut config: CreateQemu = serde_json::from_value(form_ctx.get_submit_data())?;
+    if let Some(volid) = prepare_media(&form_ctx, &remote, &node, MediaContentType::Iso).await? {
+        config.ide2 = Some(format!("{volid},media=cdrom"));
+    }
+    let upid = crate::pdm_client()
+        .pve_create_qemu(&remote, &node, &config)
+        .await?;
+    link.send_message(Msg::ShowTask(upid));
+    link.send_reload();
+    Ok(())
+}
+
+async fn create_lxc(
+    form_ctx: FormContext,
+    link: LoadableComponentScope<GuestPanelComp>,
+) -> Result<(), Error> {
+    let remote = form_ctx.read().get_field_text("remote");
+    let node = form_ctx.read().get_field_text("node");
+    let mut data = form_ctx.get_submit_data();
+    if let Some(volid) = prepare_media(&form_ctx, &remote, &node, MediaContentType::Vztmpl).await? {
+        data["ostemplate"] = serde_json::Value::String(volid);
+    }
+    let config: CreateLxc = serde_json::from_value(data)?;
+    let upid = crate::pdm_client()
+        .pve_create_lxc(&remote, &node, &config)
+        .await?;
+    link.send_message(Msg::ShowTask(upid));
+    link.send_reload();
+    Ok(())
+}
+
+async fn prepare_media(
+    form_ctx: &FormContext,
+    remote: &str,
+    node: &str,
+    content: MediaContentType,
+) -> Result<Option<String>, Error> {
+    let url = form_ctx.read().get_field_text("media-url");
+    if url.is_empty() {
+        return Ok(None);
+    }
+    let storage = form_ctx.read().get_field_text("media-storage");
+    let filename = form_ctx.read().get_field_text("media-filename");
+    if storage.is_empty() || filename.is_empty() {
+        anyhow::bail!("media storage and filename are required when a URL is provided");
+    }
+    let checksum = form_ctx.read().get_field_text("media-checksum");
+    let checksum_algorithm = form_ctx.read().get_field_text("media-checksum-algorithm");
+    if checksum.is_empty() != checksum_algorithm.is_empty() {
+        anyhow::bail!("checksum and checksum algorithm must be provided together");
+    }
+    let download = PveDownloadUrl {
+        url,
+        filename: filename.clone(),
+        content,
+        checksum: (!checksum.is_empty()).then_some(checksum),
+        checksum_algorithm: (!checksum_algorithm.is_empty()).then_some(checksum_algorithm),
+        verify_certificates: Some(true),
+    };
+    let client = crate::pdm_client();
+    let upid = client
+        .pve_download_storage_content(remote, node, &storage, &download)
+        .await?;
+    let status = client.pve_wait_for_task(&upid).await?;
+    if status.exitstatus.as_deref() != Some("OK") {
+        anyhow::bail!(
+            "PVE media download failed: {}",
+            status.exitstatus.as_deref().unwrap_or("unknown status")
+        );
+    }
+    Ok(Some(format!("{storage}:{content}/{filename}")))
+}
+
+fn target_fields(form_ctx: &FormContext, panel: InputPanel) -> InputPanel {
+    let remote = form_ctx.read().get_field_text("remote");
+    let panel = panel.with_field(
+        tr!("Remote"),
+        RemoteSelector::new()
+            .name("remote")
+            .remote_type(RemoteType::Pve)
+            .required(true),
+    );
+
+    if remote.is_empty() {
+        panel.with_field(
+            tr!("Node"),
+            DisplayField::new()
+                .name("node")
+                .key("node-no-remote")
+                .value(tr!("Select a remote first.")),
+        )
+    } else {
+        panel.with_field(
+            tr!("Node"),
+            PveNodeSelector::new(remote.clone())
+                .name("node")
+                .key(format!("create-node-{remote}"))
+                .show_memory(true)
+                .required(true),
+        )
+    }
+}
+
+fn create_qemu_input_panel(form_ctx: &FormContext) -> Html {
+    target_fields(form_ctx, InputPanel::new().padding(4).min_width(700))
+        .with_field(
+            "VMID",
+            Number::new().name("vmid").min(1u64).required(true),
+        )
+        .with_field(tr!("Name"), Field::new().name("name"))
+        .with_field(
+            tr!("CPU cores"),
+            Number::new().name("cores").min(1u64).placeholder("2"),
+        )
+        .with_right_field(
+            tr!("Memory (MiB)"),
+            Number::new().name("memory").min(16u64).placeholder("2048"),
+        )
+        .with_large_field(
+            tr!("Installation media"),
+            Field::new()
+                .name("ide2")
+                .placeholder("storage:iso/image.iso,media=cdrom"),
+        )
+        .with_large_field(
+            tr!("Download media URL"),
+            Field::new().name("media-url").placeholder("https://example.invalid/image.iso"),
+        )
+        .with_field(tr!("Media storage"), Field::new().name("media-storage"))
+        .with_right_field(tr!("Media filename"), Field::new().name("media-filename"))
+        .with_field(
+            tr!("Checksum algorithm"),
+            Combobox::new()
+                .name("media-checksum-algorithm")
+                .editable(false)
+                .items(Rc::new(vec!["sha256".into(), "sha512".into()])),
+        )
+        .with_right_field(tr!("Checksum"), Field::new().name("media-checksum"))
+        .with_large_field(
+            tr!("System disk"),
+            Field::new()
+                .name("scsi0")
+                .placeholder("storage:32,discard=on,iothread=1"),
+        )
+        .with_large_field(
+            tr!("Network"),
+            Field::new()
+                .name("net0")
+                .placeholder("virtio,bridge=vmbr0"),
+        )
+        .with_large_field(tr!("Description"), Field::new().name("description"))
+        .with_large_field(
+            tr!("Start after creation"),
+            Checkbox::new().name("start").default(false),
+        )
+        .into()
+}
+
+fn create_lxc_input_panel(form_ctx: &FormContext) -> Html {
+    target_fields(form_ctx, InputPanel::new().padding(4).min_width(700))
+        .with_field(
+            "VMID",
+            Number::new().name("vmid").min(1u64).required(true),
+        )
+        .with_field(tr!("Hostname"), Field::new().name("hostname"))
+        .with_large_field(
+            tr!("Template"),
+            Field::new()
+                .name("ostemplate")
+                .placeholder("storage:vztmpl/template.tar.zst"),
+        )
+        .with_large_field(
+            tr!("Download template URL"),
+            Field::new().name("media-url").placeholder("https://example.invalid/template.tar.zst"),
+        )
+        .with_field(tr!("Template storage"), Field::new().name("media-storage"))
+        .with_right_field(tr!("Template filename"), Field::new().name("media-filename"))
+        .with_field(
+            tr!("Checksum algorithm"),
+            Combobox::new()
+                .name("media-checksum-algorithm")
+                .editable(false)
+                .items(Rc::new(vec!["sha256".into(), "sha512".into()])),
+        )
+        .with_right_field(tr!("Checksum"), Field::new().name("media-checksum"))
+        .with_field(
+            tr!("CPU cores"),
+            Number::new().name("cores").min(1u64).placeholder("2"),
+        )
+        .with_right_field(
+            tr!("Memory (MiB)"),
+            Number::new().name("memory").min(16u64).placeholder("2048"),
+        )
+        .with_large_field(
+            tr!("Root disk"),
+            Field::new().name("rootfs").placeholder("storage:8"),
+        )
+        .with_large_field(
+            tr!("Network"),
+            Field::new()
+                .name("net0")
+                .placeholder("name=eth0,bridge=vmbr0,ip=dhcp"),
+        )
+        .with_large_field(tr!("SSH public keys"), Field::new().name("ssh-public-keys"))
+        .with_large_field(tr!("Description"), Field::new().name("description"))
+        .with_large_field(
+            tr!("Unprivileged container"),
+            Checkbox::new().name("unprivileged").default(true),
+        )
+        .with_large_field(
+            tr!("Start after creation"),
+            Checkbox::new().name("start").default(false),
+        )
+        .into()
 }
 
 fn failed_remotes_banner(failed: &[String]) -> Html {
@@ -740,6 +1053,33 @@ fn guest_actions(link: &LoadableComponentScope<GuestPanelComp>, entry: &GuestEnt
     let local_id = entry.resource.id();
     let guest_info = entry.guest_info();
     let is_qemu = entry.guest_type() == GuestType::Qemu;
+    let live = guest_is_live(&status);
+
+    let action_item = |label: String, action: Action, disabled: bool| {
+        let link = link.clone();
+        let key = key.clone();
+        MenuItem::new(label)
+            .disabled(disabled)
+            .on_select(move |_| {
+                link.change_view(Some(ViewState::Confirm(action.clone(), key.clone())))
+            })
+    };
+
+    let advanced_menu = Menu::new()
+        .with_item(action_item(tr!("Reboot"), Action::Reboot, template || !live))
+        .with_item(action_item(tr!("Force stop"), Action::Stop, template || !live))
+        .with_item(action_item(
+            tr!("Reset"),
+            Action::Reset,
+            template || !live || !is_qemu,
+        ))
+        .with_item(action_item(tr!("Suspend"), Action::Suspend, template || !live))
+        .with_item(action_item(
+            tr!("Convert to template"),
+            Action::Template,
+            template || live,
+        ))
+        .with_item(action_item(tr!("Delete"), Action::Delete, live));
 
     Row::new()
         .gap(1)
@@ -843,6 +1183,12 @@ fn guest_actions(link: &LoadableComponentScope<GuestPanelComp>, entry: &GuestEnt
                     }),
             )
             .tip(tr!("Open in PVE UI")),
+        )
+        .with_child(
+            MenuButton::new("")
+                .icon_class("fa fa-ellipsis-v")
+                .aria_label(tr!("More guest actions"))
+                .menu(advanced_menu),
         )
         .into()
 }

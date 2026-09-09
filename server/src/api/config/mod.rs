@@ -5,6 +5,7 @@ use proxmox_sortable_macro::sortable;
 pub mod access;
 pub mod acme;
 pub mod certificate;
+pub mod media;
 pub mod notes;
 pub mod views;
 
@@ -13,6 +14,7 @@ const SUBDIRS: SubdirMap = &sorted!([
     ("access", &access::ROUTER),
     ("acme", &acme::ROUTER),
     ("certificate", &certificate::ROUTER),
+    ("media", &media::ROUTER),
     ("notes", &notes::ROUTER),
     ("views", &views::ROUTER)
 ]);

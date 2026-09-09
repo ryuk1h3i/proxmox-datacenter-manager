@@ -45,7 +45,6 @@ proxmox-schema = "5"
 proxmox-subscription = { version = "1.0.1", features = ["api-types"], default-features = false }
 proxmox-rrd-api-types = "1"
 proxmox-time = "2"
-proxmox-node-status = "1"
 pbs-api-types = { version = "1.0.3", features = [ "enum-fallback" ] }
 
 pdm-api-types = { version = "1.0", path = "../lib/pdm-api-types" }

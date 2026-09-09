@@ -21,6 +21,7 @@ use crate::{
 use crate::remote_tasks;
 
 mod node;
+mod maintenance;
 mod rrddata;
 pub mod tasks;
 
@@ -52,6 +53,9 @@ const NODES_ROUTER: Router = Router::new().match_all("node", &node::ROUTER);
 #[sortable]
 const REMOTE_SUBDIRS: SubdirMap = &sorted!([
     ("nodes", &NODES_ROUTER),
+    ("prune-jobs", &maintenance::PRUNE_JOBS_ROUTER),
+    ("sync-jobs", &maintenance::SYNC_JOBS_ROUTER),
+    ("verify-jobs", &maintenance::VERIFY_JOBS_ROUTER),
     ("status", &Router::new().get(&API_METHOD_GET_STATUS)),
     ("rrddata", &rrddata::PBS_NODE_RRD_ROUTER),
     ("datastore", &DATASTORE_ROUTER),
@@ -68,12 +72,14 @@ const DATASTORE_ITEM_ROUTER: Router = Router::new()
 
 #[sortable]
 const DATASTORE_ITEM_SUBDIRS: SubdirMap = &sorted!([
+    ("maintenance", &maintenance::DATASTORE_MAINTENANCE_ROUTER),
     ("rrddata", &rrddata::PBS_DATASTORE_RRD_ROUTER),
     (
         "namespaces",
         &Router::new().get(&API_METHOD_LIST_NAMESPACES)
     ),
     ("snapshots", &Router::new().get(&API_METHOD_LIST_SNAPSHOTS)),
+    ("snapshot-actions", &maintenance::SNAPSHOT_ACTIONS_ROUTER),
 ]);
 
 // converts a remote + pbs_api_types::UPID into a RemoteUpid and starts tracking it

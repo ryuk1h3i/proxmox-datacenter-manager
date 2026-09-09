@@ -6,15 +6,6 @@ set -e
 
 case "$1" in
   configure)
-    # modeled after dh_systemd_start output
-    systemctl --system daemon-reload >/dev/null || true
-    if [ -n "$2" ]; then
-      _dh_action=try-reload-or-restart
-    else
-      _dh_action=start
-    fi
-    deb-systemd-invoke $_dh_action 'proxmox-datacenter-api.service' 'proxmox-datacenter-privileged-api.service' >/dev/null || true
-
     # For migrations or upgrade steps that can safely be automated.
     # NOTE: check if '/proxmox_install_mode' exist to avoid doing something if in the ISO installer environment.
 
@@ -26,12 +17,6 @@ case "$1" in
             mv "$cfgdir/ldap_passwords.json" "$cfgdir/access/ldap-passwords.json" || \
                 echo "moving '$cfgdir/ldap_passwords.json' to '$cfgdir/access/ldap-passwords.json' failed with code $?"
         fi
-    fi
-
-    BETA_SOURCES="/etc/apt/sources.list.d/pdm-test.sources"
-    if test -f "$BETA_SOURCES" && dpkg --compare-versions "$2" 'lt' '1.0.1' && dpkg --compare-versions "$2" 'gt' '0.0~~'; then
-        printf "\nNOTE: Remove the pdm-test repository, which was added during the beta phase.\nYou can (re-)add repositories on the web UI (Administration -> Repositories)\n\n"
-        rm -v "$BETA_SOURCES" || true
     fi
 
     ;;

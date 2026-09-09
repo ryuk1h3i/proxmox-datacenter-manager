@@ -37,10 +37,9 @@ zstd.workspace = true
 
 proxmox-access-control = { workspace = true, features = [ "api" ] }
 proxmox-async.workspace = true
-proxmox-auth-api = { workspace = true, features = [ "api", "ticket", "pam-authenticator", "password-authenticator" ] }
+proxmox-auth-api = { workspace = true, features = [ "api", "ticket", "password-authenticator" ] }
 proxmox-base64.workspace = true
 proxmox-daemon.workspace = true
-proxmox-disks.workspace = true
 proxmox-docgen.workspace = true
 proxmox-http = { workspace = true, features = [ "client-trait", "proxmox-async" ] } # pbs-client doesn't use these
 proxmox-installer-types.workspace = true
@@ -50,7 +49,6 @@ proxmox-log.workspace = true
 proxmox-login.workspace = true
 proxmox-network-types.workspace = true
 proxmox-openid.workspace = true
-proxmox-procfs.workspace = true
 proxmox-rest-server = { workspace = true, features = [ "templates" ] }
 proxmox-router = { workspace = true, features = [ "cli", "server"] }
 proxmox-rrd.workspace = true
@@ -61,12 +59,10 @@ proxmox-serde = { workspace = true, features = [ "serde_json" ] }
 proxmox-sortable-macro.workspace = true
 proxmox-subscription = { workspace = true, features = [ "api-types", "impl" ] }
 proxmox-sys = { workspace = true, features = [ "timer" ] }
-proxmox-systemd.workspace = true
 proxmox-tfa = { workspace = true, features = [ "api" ] }
 proxmox-time.workspace = true
 proxmox-uuid.workspace = true
 
-proxmox-apt = { workspace = true, features = [ "cache" ] }
 proxmox-apt-api-types.workspace = true
 
 proxmox-client = { workspace = true, features = [ "hyper-client"] }
@@ -74,11 +70,7 @@ proxmox-client = { workspace = true, features = [ "hyper-client"] }
 proxmox-config-digest = { workspace = true, features = [ "openssl" ] }
 proxmox-product-config.workspace = true
 proxmox-dns-api = { workspace = true, features = [ "impl" ] }
-proxmox-time-api = { workspace = true, features = [ "impl" ] }
-proxmox-network-api = { workspace = true, features = [ "impl" ] }
-proxmox-syslog-api = { workspace = true, features = [ "impl" ] }
 proxmox-acme-api = { workspace = true, features = [ "impl" ] }
-proxmox-node-status = { workspace = true, features = [ "api" ] }
 
 pdm-api-types.workspace = true
 pdm-buildcfg.workspace = true

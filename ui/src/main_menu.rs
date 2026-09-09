@@ -9,24 +9,21 @@ use pwt::state::{NavigationContextExt, Selection};
 use pwt::widget::nav::{Menu, MenuItem, NavigationDrawer};
 use pwt::widget::{Container, Panel, Row, SelectionView, SelectionViewRenderInfo};
 
-use proxmox_yew_comp::{AclContext, NotesView, XTermJs};
+use proxmox_yew_comp::{AclContext, NotesView, Tasks};
 
 use pdm_api_types::remotes::RemoteType;
 use pdm_api_types::{PRIV_SYS_AUDIT, PRIV_SYS_MODIFY};
 
 use crate::ceph::CephView;
-use crate::configuration::subscription_panel::SubscriptionPanel;
 use crate::configuration::subscription_registry::SubscriptionRegistryProps;
+use crate::configuration::media::MediaCatalog;
 use crate::configuration::views::ViewGrid;
 use crate::dashboard::view::View;
 use crate::guests::GuestPanel;
 use crate::remotes::RemotesPanel;
 use crate::sdn::ZoneTree;
 use crate::sdn::evpn::EvpnPanel;
-use crate::{
-    AccessControl, CertificatesPanel, RemoteListCacheEntry, ServerAdministration,
-    SystemConfiguration,
-};
+use crate::{AccessControl, CertificatesPanel, RemoteListCacheEntry, SystemConfiguration};
 
 /*
 use crate::{
@@ -44,10 +41,6 @@ use pwt_macros::builder;
 #[derive(Clone, PartialEq, Properties)]
 #[builder]
 pub struct MainMenu {
-    #[builder(IntoPropValue, into_prop_value)]
-    #[prop_or_default]
-    pub username: Option<AttrValue>,
-
     /// If set, add a loading indicator to the remote menu.
     ///
     /// Just to indicate that the remote list may not be up to date.
@@ -217,6 +210,15 @@ impl Component for PdmMainMenu {
             views,
         );
 
+        register_view(
+            &mut menu,
+            &mut content,
+            tr!("Tasks"),
+            "tasks",
+            Some("fa fa-list-alt"),
+            |_| Tasks::new().into(),
+        );
+
         if self.acl_context.check_privs(&["system"], PRIV_SYS_AUDIT) {
             let allow_editing = self
                 .acl_context
@@ -273,16 +275,10 @@ impl Component for PdmMainMenu {
         register_view(
             &mut config_submenu,
             &mut content,
-            tr!("Subscription"),
-            "subscription",
-            Some("fa fa-support"),
-            |_| {
-                Panel::new()
-                    .class(css::FlexFit)
-                    .title(tr!("Subscription"))
-                    .with_child(SubscriptionPanel::new())
-                    .into()
-            },
+            tr!("Media Catalog"),
+            "media-catalog",
+            Some("fa fa-compact-disc"),
+            |_| MediaCatalog::new().into(),
         );
 
         register_submenu(
@@ -302,32 +298,6 @@ impl Component for PdmMainMenu {
             "subscription-registry",
             Some("fa fa-id-card"),
             |_| SubscriptionRegistryProps::new().into(),
-        );
-
-        let mut admin_submenu = Menu::new();
-
-        register_view(
-            &mut admin_submenu,
-            &mut content,
-            tr!("Shell"),
-            "shell",
-            Some("fa fa-terminal"),
-            |_| XTermJs::new().into(),
-        );
-
-        let username = ctx.props().username.clone();
-        register_submenu(
-            &mut menu,
-            &mut content,
-            tr!("Administration"),
-            "administration",
-            Some("fa fa-wrench"),
-            move |_| {
-                ServerAdministration::new()
-                    .username(username.clone())
-                    .into()
-            },
-            admin_submenu,
         );
 
         let mut sdn_submenu = Menu::new();

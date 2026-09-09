@@ -18,6 +18,7 @@ pub(crate) mod overview;
 use overview::PbsNodeOverviewPanel;
 
 use crate::{get_deep_url_low_level, remotes::RemoteTaskList};
+use crate::pbs::jobs::PbsJobsPanel;
 
 #[derive(Clone, Debug, Eq, PartialEq, Properties)]
 pub struct PbsNodePanel {
@@ -68,6 +69,16 @@ impl yew::Component for PbsNodePanelComp {
             .class(pwt::css::FlexFit)
             .title(title)
             .class(ColorScheme::Neutral)
+            .with_item_builder(
+                TabBarItem::new()
+                    .key("jobs_view")
+                    .label(tr!("Jobs"))
+                    .icon_class("fa fa-calendar"),
+                {
+                    let remote = props.remote.clone();
+                    move |_| PbsJobsPanel::new(remote.clone()).into()
+                },
+            )
             .with_item_builder(
                 TabBarItem::new()
                     .key("overview")

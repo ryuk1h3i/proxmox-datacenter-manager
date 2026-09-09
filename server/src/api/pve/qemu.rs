@@ -1,6 +1,7 @@
 use anyhow::{Context, Error, bail};
 
 use proxmox_access_control::CachedUserInfo;
+use proxmox_client::HttpApiClient;
 use proxmox_router::{
     ApiMethod, Permission, Router, RpcEnvironment, SubdirMap, http_bail, list_subdirs_api_method,
 };
@@ -9,9 +10,10 @@ use proxmox_sortable_macro::sortable;
 
 use pdm_api_types::remotes::REMOTE_ID_SCHEMA;
 use pdm_api_types::remotes::Remote;
+use pdm_api_types::guest::{CloneQemu, CreateQemu, UpdateQemu};
 use pdm_api_types::{
     Authid, CIDR_FORMAT, ConfigurationState, NODE_SCHEMA, PRIV_RESOURCE_AUDIT,
-    PRIV_RESOURCE_MANAGE, PRIV_RESOURCE_MIGRATE, PRIV_SYS_CONSOLE, RemoteUpid,
+    PRIV_RESOURCE_CREATE, PRIV_RESOURCE_MANAGE, PRIV_RESOURCE_MIGRATE, PRIV_SYS_CONSOLE, RemoteUpid,
     SNAPSHOT_NAME_SCHEMA, VMID_SCHEMA,
 };
 
@@ -24,19 +26,27 @@ use crate::api::remotes::shell::TermTicketType;
 
 use super::{
     check_guest_delete_perms, check_guest_list_permissions, check_guest_permissions,
-    connect_to_remote, connect_to_remote_by_id, find_node_for_vm, new_remote_upid,
+    connect_to_remote, connect_to_remote_by_id, find_node_for_vm, new_remote_upid, raw_client_to_remote_by_id,
 };
 
 pub const ROUTER: Router = Router::new()
     .get(&API_METHOD_LIST_QEMU)
+    .post(&API_METHOD_CREATE_QEMU)
     .match_all("vmid", &QEMU_VM_ROUTER);
 
 const QEMU_VM_ROUTER: Router = Router::new()
     .get(&list_subdirs_api_method!(QEMU_VM_SUBDIRS))
+    .delete(&API_METHOD_DELETE_QEMU)
     .subdirs(QEMU_VM_SUBDIRS);
 #[sortable]
 const QEMU_VM_SUBDIRS: SubdirMap = &sorted!([
-    ("config", &Router::new().get(&API_METHOD_QEMU_GET_CONFIG)),
+    (
+        "config",
+        &Router::new()
+            .get(&API_METHOD_QEMU_GET_CONFIG)
+            .put(&API_METHOD_QEMU_UPDATE_CONFIG)
+    ),
+    ("clone", &Router::new().post(&API_METHOD_QEMU_CLONE)),
     ("pending", &Router::new().get(&API_METHOD_QEMU_GET_PENDING)),
     ("firewall", &super::firewall::QEMU_FW_ROUTER),
     ("rrddata", &super::rrddata::QEMU_RRD_ROUTER),
@@ -45,6 +55,10 @@ const QEMU_VM_SUBDIRS: SubdirMap = &sorted!([
     ("stop", &Router::new().post(&API_METHOD_QEMU_STOP)),
     ("shutdown", &Router::new().post(&API_METHOD_QEMU_SHUTDOWN)),
     ("resume", &Router::new().post(&API_METHOD_QEMU_RESUME)),
+    ("reboot", &Router::new().post(&API_METHOD_QEMU_REBOOT)),
+    ("reset", &Router::new().post(&API_METHOD_QEMU_RESET)),
+    ("suspend", &Router::new().post(&API_METHOD_QEMU_SUSPEND)),
+    ("template", &Router::new().post(&API_METHOD_QEMU_TEMPLATE)),
     (
         "snapshot",
         &Router::new()
@@ -87,6 +101,96 @@ const QEMU_SNAPSHOT_SUBDIRS: SubdirMap = &sorted!([
         &Router::new().post(&API_METHOD_QEMU_ROLLBACK_SNAPSHOT)
     )
 ]);
+
+#[api(
+    input: {
+        properties: {
+            remote: { schema: REMOTE_ID_SCHEMA },
+            node: { schema: NODE_SCHEMA },
+            config: { type: CreateQemu, flatten: true },
+        },
+    },
+    returns: { type: RemoteUpid },
+    access: {
+        permission: &Permission::Privilege(&["resource", "{remote}"], PRIV_RESOURCE_CREATE, false),
+    },
+)]
+/// Create a QEMU virtual machine on a remote PVE node.
+pub async fn create_qemu(
+    remote: String,
+    node: String,
+    config: CreateQemu,
+) -> Result<RemoteUpid, Error> {
+    let client = raw_client_to_remote_by_id(&remote)?;
+    let path = format!("/api2/extjs/nodes/{node}/qemu");
+    let upid = client
+        .post(&path, &config)
+        .await?
+        .expect_json::<pve_api_types::PveUpid>()?
+        .data;
+    new_remote_upid(remote, upid).await
+}
+
+#[api(
+    input: {
+        properties: {
+            remote: { schema: REMOTE_ID_SCHEMA },
+            node: { schema: NODE_SCHEMA, optional: true },
+            vmid: { schema: VMID_SCHEMA },
+            config: { type: UpdateQemu, flatten: true },
+        },
+    },
+    access: {
+        permission: &Permission::Privilege(&["resource", "{remote}", "guest", "{vmid}"], PRIV_RESOURCE_MANAGE, false),
+    },
+)]
+/// Update common QEMU virtual machine configuration properties.
+pub async fn qemu_update_config(
+    remote: String,
+    node: Option<String>,
+    vmid: u32,
+    config: UpdateQemu,
+) -> Result<(), Error> {
+    let pve = connect_to_remote_by_id(&remote)?;
+    let node = find_node_for_vm(node, vmid, pve.as_ref()).await?;
+    let client = raw_client_to_remote_by_id(&remote)?;
+    let path = format!("/api2/extjs/nodes/{node}/qemu/{vmid}/config");
+    client.put(&path, &config).await?.nodata()?;
+    Ok(())
+}
+
+#[api(
+    input: {
+        properties: {
+            remote: { schema: REMOTE_ID_SCHEMA },
+            node: { schema: NODE_SCHEMA, optional: true },
+            vmid: { schema: VMID_SCHEMA },
+            config: { type: CloneQemu, flatten: true },
+        },
+    },
+    returns: { type: RemoteUpid },
+    access: {
+        permission: &Permission::Privilege(&["resource", "{remote}"], PRIV_RESOURCE_CREATE, false),
+    },
+)]
+/// Clone a QEMU virtual machine or template.
+pub async fn qemu_clone(
+    remote: String,
+    node: Option<String>,
+    vmid: u32,
+    config: CloneQemu,
+) -> Result<RemoteUpid, Error> {
+    let pve = connect_to_remote_by_id(&remote)?;
+    let node = find_node_for_vm(node, vmid, pve.as_ref()).await?;
+    let client = raw_client_to_remote_by_id(&remote)?;
+    let path = format!("/api2/extjs/nodes/{node}/qemu/{vmid}/clone");
+    let upid = client
+        .post(&path, &config)
+        .await?
+        .expect_json::<pve_api_types::PveUpid>()?
+        .data;
+    new_remote_upid(remote, upid).await
+}
 
 #[api(
     input: {
@@ -374,6 +478,116 @@ pub async fn qemu_resume(
         .resume_qemu_async(&node, vmid, Default::default())
         .await?;
 
+    new_remote_upid(remote, upid).await
+}
+
+async fn qemu_raw_action(
+    remote: String,
+    node: Option<String>,
+    vmid: u32,
+    action: &str,
+) -> Result<RemoteUpid, Error> {
+    let pve = connect_to_remote_by_id(&remote)?;
+    let node = find_node_for_vm(node, vmid, pve.as_ref()).await?;
+    let client = raw_client_to_remote_by_id(&remote)?;
+    let path = format!("/api2/extjs/nodes/{node}/qemu/{vmid}/status/{action}");
+    let upid = client
+        .post(&path, &serde_json::json!({}))
+        .await?
+        .expect_json::<pve_api_types::PveUpid>()?
+        .data;
+    new_remote_upid(remote, upid).await
+}
+
+macro_rules! qemu_action {
+    ($name:ident, $action:literal, $doc:literal) => {
+        #[api(
+            input: {
+                properties: {
+                    remote: { schema: REMOTE_ID_SCHEMA },
+                    node: { schema: NODE_SCHEMA, optional: true },
+                    vmid: { schema: VMID_SCHEMA },
+                },
+            },
+            returns: { type: RemoteUpid },
+            access: {
+                permission: &Permission::Privilege(&["resource", "{remote}", "guest", "{vmid}"], PRIV_RESOURCE_MANAGE, false),
+            },
+        )]
+        #[doc = $doc]
+        pub async fn $name(
+            remote: String,
+            node: Option<String>,
+            vmid: u32,
+        ) -> Result<RemoteUpid, Error> {
+            qemu_raw_action(remote, node, vmid, $action).await
+        }
+    };
+}
+
+qemu_action!(qemu_reboot, "reboot", "Reboot a QEMU virtual machine.");
+qemu_action!(qemu_reset, "reset", "Reset a QEMU virtual machine.");
+qemu_action!(qemu_suspend, "suspend", "Suspend a QEMU virtual machine.");
+
+#[api(
+    input: {
+        properties: {
+            remote: { schema: REMOTE_ID_SCHEMA },
+            node: { schema: NODE_SCHEMA, optional: true },
+            vmid: { schema: VMID_SCHEMA },
+        },
+    },
+    returns: { type: RemoteUpid },
+    access: {
+        permission: &Permission::Privilege(&["resource", "{remote}", "guest", "{vmid}"], PRIV_RESOURCE_MANAGE, false),
+    },
+)]
+/// Convert a stopped QEMU virtual machine into a template.
+pub async fn qemu_template(
+    remote: String,
+    node: Option<String>,
+    vmid: u32,
+) -> Result<RemoteUpid, Error> {
+    let pve = connect_to_remote_by_id(&remote)?;
+    let node = find_node_for_vm(node, vmid, pve.as_ref()).await?;
+    let client = raw_client_to_remote_by_id(&remote)?;
+    let path = format!("/api2/extjs/nodes/{node}/qemu/{vmid}/template");
+    let upid = client
+        .post(&path, &serde_json::json!({}))
+        .await?
+        .expect_json::<pve_api_types::PveUpid>()?
+        .data;
+    new_remote_upid(remote, upid).await
+}
+
+#[api(
+    input: {
+        properties: {
+            remote: { schema: REMOTE_ID_SCHEMA },
+            node: { schema: NODE_SCHEMA, optional: true },
+            vmid: { schema: VMID_SCHEMA },
+        },
+    },
+    returns: { type: RemoteUpid },
+    access: { permission: &Permission::Anybody },
+)]
+/// Permanently destroy a QEMU virtual machine.
+pub async fn delete_qemu(
+    remote: String,
+    node: Option<String>,
+    vmid: u32,
+    rpcenv: &mut dyn RpcEnvironment,
+) -> Result<RemoteUpid, Error> {
+    check_guest_delete_perms(rpcenv, &remote, vmid)?;
+    let pve = connect_to_remote_by_id(&remote)?;
+    let node = find_node_for_vm(node, vmid, pve.as_ref()).await?;
+    let client = raw_client_to_remote_by_id(&remote)?;
+    let path = format!("/api2/extjs/nodes/{node}/qemu/{vmid}");
+    let upid = client
+        .delete(&path)
+        .await?
+        .expect_json::<pve_api_types::PveUpid>()?
+        .data;
     new_remote_upid(remote, upid).await
 }
 

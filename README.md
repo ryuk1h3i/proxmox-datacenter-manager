@@ -10,9 +10,18 @@ VE and Proxmox Backup Server in one central place.
   datastores and so on. Proxmox Datacenter Manager provides a dashboard that tries to present
   information such that potential problematic outliers can be found easily.
 - Customizable dashboards ("views") showing a configurable subset of resources
-- Basic management of the guest resources
+- Central inventory and management of QEMU virtual machines and LXC containers
   - Resource graphs
-  - Basic power management (start, reboot, shutdown)
+  - Create VM and container workflows
+  - Start, shutdown, stop, reboot, reset, suspend, resume, clone, template conversion and delete
+  - Configuration, snapshots and migration
+- URL-only ISO and LXC template catalog
+  - PDM stores metadata and checksums, never image payloads
+  - PVE downloads media directly from the source URL into the selected storage
+- Scheduled PVE backup job management and on-demand vzdump tasks
+- Native PVE intra-cluster guest replication management and run-now tasks
+- PBS prune, verification and synchronization job management
+- PBS datastore prune preview/execution and garbage collection
 - Remote shell for Proxmox VE and Proxmox Backup Server remotes
 - Global overview over available system updates for managed remotes
 - Firewall overview for all managed remotes
@@ -28,11 +37,78 @@ VE and Proxmox Backup Server in one central place.
 - ACME/Let's Encrypt
 
 - A non-exhaustive list of features planned for future releases is:
-  - Management of more configuration (e.g. backup jobs, notification policies, package repos, HA)
-  - Active-standby architecture for standby instances of PDM to avoid single point of failure.
+  - Management of more configuration (e.g. notification policies and package repositories)
   - Integration of other projects, like Proxmox Mail Gateway, and potentially also Proxmox Offline Mirror.
-  - Off-site replication copies of guest for manual recovery on DC failure (not HA!)
   - ... to be determined from user feedback and feature requests.
+
+## Deployment and scope
+
+This variant is designed to run as a containerized control plane. PVE and PBS remain authoritative
+for guest data, schedules and task execution. PDM does not administer its Docker host and does not
+provide local PAM, package, subscription, shell or host-metrics features.
+
+High availability and automatic failover are intentionally out of scope. Replication support is
+limited to the native PVE intra-cluster guest replication API; PBS synchronization remains a
+separate backup-server workflow. Media is referenced by URL and transferred directly by PVE, so
+the PDM container does not require an object store or persistent image repository.
+
+## Container image
+
+The ready-to-run image is published to GitHub Container Registry:
+
+```text
+ghcr.io/ryuk1h3i/proxmox-datacenter-manager
+```
+
+The [container workflow](.github/workflows/container-image.yml) runs for every pushed commit on
+every branch. It also validates pull requests without publishing an image and can be started
+manually from the Actions page. Images are currently built for `linux/amd64`.
+
+Published tags are:
+
+- `latest`: the latest commit on the repository's default branch.
+- `<branch>`: the latest commit on that branch, with Docker-safe normalization.
+- `sha-<short-sha>`: an immutable tag identifying the exact commit.
+- `vX.Y.Z`, `X.Y.Z`, and `X.Y`: tags generated for a pushed semantic version tag such as `v1.2.3`.
+
+The workflow authenticates with the automatically provided `GITHUB_TOKEN`; no registry password
+or personal access token needs to be stored as a repository secret. The workflow requires the
+standard `packages: write` permission declared in the workflow. If the package is private, clients
+must authenticate to `ghcr.io` with a GitHub token that has `read:packages` permission before
+pulling it.
+
+### Run with Docker Compose
+
+Create a local file containing only the initial password for `admin@pdm`, then point Compose to it:
+
+```sh
+printf '%s' 'replace-with-a-strong-password' > pdm-admin-password
+chmod 600 pdm-admin-password
+printf '%s\n' 'PDM_ADMIN_PASSWORD_FILE=./pdm-admin-password' > .env
+docker compose pull
+docker compose up -d
+```
+
+The service is available at `https://localhost:8443`. The password file is mounted as a Docker
+secret and is used only to bootstrap `admin@pdm`; configuration, state, cache and task logs are kept
+in named Docker volumes.
+
+To deploy a specific immutable build, set `PDM_IMAGE` in `.env`:
+
+```text
+PDM_IMAGE=ghcr.io/ryuk1h3i/proxmox-datacenter-manager:sha-0123456
+```
+
+To build the current checkout locally instead of pulling GHCR, run `docker compose build` followed
+by `docker compose up -d`. The same multi-stage [Dockerfile](Dockerfile) is used locally and by
+GitHub Actions.
+
+### Publishing behavior
+
+Pushes to branches and version tags build and publish the image. Pull requests execute the complete
+container build but set `push: false`, preventing unmerged code from being uploaded to GHCR.
+BuildKit's GitHub Actions cache is reused between runs, and concurrent runs for the same Git ref are
+cancelled when a newer commit arrives.
 
 ## Technology Overview
 

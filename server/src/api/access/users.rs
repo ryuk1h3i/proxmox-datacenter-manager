@@ -139,14 +139,6 @@ pub fn create_user(
     proxmox_access_control::user::save_config(&section_config)?;
 
     if let Some(password) = password {
-        let user_info = CachedUserInfo::new()?;
-        let current_auth_id: Authid = rpcenv
-            .get_auth_id()
-            .context("no authid available")?
-            .parse()?;
-        if realm == "pam" && !user_info.is_superuser(&current_auth_id) {
-            bail!("only superuser can edit pam credentials!");
-        }
         let client_ip = rpcenv.get_client_ip().map(|sa| sa.ip());
         authenticator.store_password(config.userid.name(), &password, client_ip.as_ref())?;
     }

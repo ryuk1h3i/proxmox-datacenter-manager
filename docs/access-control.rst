@@ -12,9 +12,6 @@ User Configuration
 Proxmox Datacenter Manager supports several authentication realms, and you need to choose the realm when
 you add a new user. Possible realms are:
 
-:pam: Linux PAM standard authentication. Use this if you want to authenticate as a Linux system
-      user. The users needs to already exist on the host system.
-
 :pdm: Proxmox Datacenter Manager realm. This type stores hashed passwords in
       ``/etc/proxmox-datacenter-manager/access/shadow.json``.
 
@@ -24,8 +21,9 @@ you add a new user. Possible realms are:
 
 :ad: Active Directory server. Users can authenticate against external Active Directory servers.
 
-The `root@pam` superuser has full administration rights on everything, so it's recommended to add
-other users with less privileges.
+The ``admin@pdm`` superuser has full administration rights on everything. Its initial password is
+read from the Docker secret at ``/run/secrets/pdm-admin-password`` during first-time setup. Add
+other users with less privileges for regular use.
 
 .. _api_tokens:
 

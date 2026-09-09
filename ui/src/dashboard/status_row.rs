@@ -1,26 +1,18 @@
-use anyhow::Error;
 use gloo_timers::callback::Interval;
 use yew::html::IntoPropValue;
 use yew::{Component, Properties};
-use yew_router::AnyRoute;
-use yew_router::prelude::RouterScopeExt;
 
 use pwt::prelude::*;
 use pwt::state::SharedState;
-use pwt::{AsyncPool, css};
+use pwt::css;
 use pwt::{
     css::AlignItems,
     widget::{ActionIcon, Container, Row, Tooltip},
 };
 use pwt_macros::{builder, widget};
 
-use proxmox_subscription::SubscriptionStatus;
-use proxmox_yew_comp::subscription_icon;
 use proxmox_yew_comp::utils::render_epoch;
 
-use pdm_api_types::subscription::PdmSubscriptionInfo;
-
-use crate::LoadResult;
 use crate::dashboard::view::EditingMessage;
 
 #[widget(comp=PdmDashboardStatusRow)]
@@ -59,7 +51,6 @@ impl DashboardStatusRow {
 pub enum Msg {
     /// The bool denotes if the reload comes from the click or the timer.
     Reload(bool),
-    SubscriptionInfoLoaded(Result<PdmSubscriptionInfo, Error>),
     Edit(EditingMessage),
 }
 
@@ -69,8 +60,6 @@ pub struct PdmDashboardStatusRow {
     loading: bool,
     edit: bool,
 
-    async_pool: AsyncPool,
-    subscription_info: LoadResult<PdmSubscriptionInfo, Error>,
 }
 
 impl PdmDashboardStatusRow {
@@ -86,16 +75,6 @@ impl PdmDashboardStatusRow {
         _interval
     }
 
-    fn load_subscription(&self, ctx: &yew::Context<Self>) {
-        // only load the subscription info here in custom views
-        if ctx.props().editing_state.is_none() {
-            return;
-        }
-        self.async_pool.send_future(ctx.link().clone(), async move {
-            let res = proxmox_yew_comp::http_get("/nodes/localhost/subscription", None).await;
-            Msg::SubscriptionInfoLoaded(res)
-        });
-    }
 }
 
 impl Component for PdmDashboardStatusRow {
@@ -107,10 +86,7 @@ impl Component for PdmDashboardStatusRow {
             _interval: Self::create_interval(ctx),
             loading: false,
             edit: false,
-            async_pool: AsyncPool::new(),
-            subscription_info: LoadResult::new(),
         };
-        this.load_subscription(ctx);
         this
     }
 
@@ -119,7 +95,6 @@ impl Component for PdmDashboardStatusRow {
         match msg {
             Msg::Reload(clicked) => {
                 props.on_reload.emit(clicked);
-                self.load_subscription(ctx);
                 self.loading = true;
                 true
             }
@@ -128,10 +103,6 @@ impl Component for PdmDashboardStatusRow {
                 if let Some(state) = props.editing_state.as_ref() {
                     state.write().push(editing);
                 }
-                true
-            }
-            Msg::SubscriptionInfoLoaded(res) => {
-                self.subscription_info.update(res);
                 true
             }
         }
@@ -148,10 +119,7 @@ impl Component for PdmDashboardStatusRow {
 
     fn view(&self, ctx: &yew::Context<Self>) -> yew::Html {
         let props = ctx.props();
-        let is_custom_view = props.editing_state.is_some();
-        let is_loading = props.last_refresh.is_none()
-            || self.loading
-            || (is_custom_view && !self.subscription_info.has_data());
+        let is_loading = props.last_refresh.is_none() || self.loading;
         let on_settings_click = props.on_settings_click.clone();
         Row::new()
             .gap(1)
@@ -177,20 +145,6 @@ impl Component for PdmDashboardStatusRow {
                 None => tr!("Now refreshing"),
             }))
             .with_flex_spacer()
-            .with_optional_child(if is_custom_view {
-                create_subscription_notice(&self.subscription_info).map(|element| {
-                    element.class("pwt-pointer").onclick({
-                        let link = ctx.link().clone();
-                        move |_| {
-                            if let Some(nav) = link.navigator() {
-                                nav.push(&AnyRoute::new("/subscription"));
-                            }
-                        }
-                    })
-                })
-            } else {
-                None
-            })
             .with_flex_spacer()
             .with_optional_child(props.editing_state.clone().and_then(|_| {
                 (!self.edit).then_some({
@@ -239,39 +193,4 @@ impl Component for PdmDashboardStatusRow {
             )
             .into()
     }
-}
-
-fn create_subscription_notice(
-    subscriptions: &LoadResult<PdmSubscriptionInfo, Error>,
-) -> Option<Tooltip> {
-    if !subscriptions.has_data() {
-        return None;
-    }
-    let mut tooltip = None;
-    if let Some(subscriptions) = &subscriptions.data {
-        if subscriptions.statistics.total_nodes == 0 {
-            return None;
-        } else if let SubscriptionStatus::Active = subscriptions.info.status {
-            return None;
-        }
-    } else if let Some(err) = &subscriptions.error {
-        tooltip = Some(err.to_string())
-    }
-    // only get here if there are remotes and PDM-subscription failed.
-    let text = tr!(
-        "Too many remote nodes without basic or higher subscriptions! No access to Enterprise-Repository or Enterprise Support."
-    );
-    let icon = subscription_icon(&SubscriptionStatus::NotFound.to_string());
-
-    Some(
-        Tooltip::new(
-            Row::new()
-                .padding_x(2)
-                .gap(2)
-                .class(css::AlignItems::Center)
-                .with_child(icon.large())
-                .with_child(Container::new().with_child(text)),
-        )
-        .tip(tooltip),
-    )
 }

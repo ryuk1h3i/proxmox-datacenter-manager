@@ -208,7 +208,7 @@ impl Component for PdmTopNavBar {
                         Button::new(tr!("Show Local Tasks"))
                             .class(ColorScheme::Primary)
                             .on_activate(move |_| {
-                                set_location_href("#/administration/tasks");
+                                set_location_href("#/tasks");
                             }),
                         Button::new(tr!("Show Remote Tasks"))
                             .class(ColorScheme::Primary)

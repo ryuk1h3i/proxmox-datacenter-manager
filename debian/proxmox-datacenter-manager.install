@@ -1,22 +1,10 @@
-debian/pdm-enterprise.sources etc/apt/sources.list.d/
-usr/lib/systemd/system/proxmox-datacenter-api.service
-usr/lib/systemd/system/proxmox-datacenter-manager-banner.service
-usr/lib/systemd/system/proxmox-datacenter-manager-daily-update.service
-usr/lib/systemd/system/proxmox-datacenter-manager-daily-update.timer
-usr/lib/systemd/system/proxmox-datacenter-privileged-api.service
 usr/libexec/proxmox/proxmox-datacenter-api
-usr/libexec/proxmox/proxmox-datacenter-manager-banner
-usr/libexec/proxmox/proxmox-datacenter-manager-daily-update
 usr/libexec/proxmox/proxmox-datacenter-privileged-api
-usr/sbin/pdmAtoB
 usr/sbin/proxmox-datacenter-manager-admin
-usr/share/bash-completion/completions/pdmAtoB.bash
 usr/share/bash-completion/completions/proxmox-datacenter-manager-admin.bash
-usr/share/man/man1/pdmAtoB.1
 usr/share/man/man1/proxmox-datacenter-api.1
 usr/share/man/man1/proxmox-datacenter-manager-admin.1
 usr/share/man/man1/proxmox-datacenter-privileged-api.1
 usr/share/man/man5/remotes.cfg.5
 usr/share/man/man5/views.cfg.5
-usr/share/zsh/vendor-completions/_pdmAtoB
 usr/share/zsh/vendor-completions/_proxmox-datacenter-manager-admin

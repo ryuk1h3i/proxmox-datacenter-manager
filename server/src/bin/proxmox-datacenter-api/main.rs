@@ -18,7 +18,7 @@ use url::form_urlencoded;
 
 use proxmox_lang::try_block;
 use proxmox_rest_server::{ApiConfig, RestEnvironment, RestServer};
-use proxmox_router::{RpcEnvironment, RpcEnvironmentType};
+use proxmox_router::{RpcEnvironment, RpcEnvironmentType, cli::CliEnvironment};
 use proxmox_sys::fs::CreateOptions;
 
 use pdm_buildcfg::configdir;
@@ -49,8 +49,8 @@ fn main() -> Result<(), Error> {
     let debug = std::env::var("PROXMOX_DEBUG").is_ok();
 
     proxmox_log::Logger::from_env("PROXMOX_DEBUG", LevelFilter::INFO)
-        .journald_on_no_workertask()
         .tasklog_pbs()
+        .stderr()
         .init()?;
 
     if std::env::args().nth(1).is_some() {
@@ -200,8 +200,6 @@ async fn run(debug: bool) -> Result<(), Error> {
     let redirector = proxmox_rest_server::Redirector::new();
     proxmox_rest_server::init_worker_tasks(pdm_buildcfg::PDM_LOG_DIR_M!().into(), file_opts)?;
 
-    proxmox_node_status::init_node_status_api(configdir!("/auth/api.pem"))?;
-
     //openssl req -x509 -newkey rsa:4096 -keyout /etc/proxmox-backup/api.key -out /etc/proxmox-backup/api.pem -nodes
 
     // we build the initial acceptor here as we cannot start if this fails
@@ -233,7 +231,6 @@ async fn run(debug: bool) -> Result<(), Error> {
 
             Ok(async {
                 log::info!("service ready and listening at {PDM_LISTEN_ADDR}");
-                proxmox_systemd::notify::SystemdNotify::Ready.notify()?;
 
                 let secure_server = async move {
                     let graceful = GracefulShutdown::new();
@@ -373,6 +370,8 @@ fn start_task_scheduler() {
 }
 
 async fn run_task_scheduler() {
+    let mut last_acme_check = 0;
+
     loop {
         // sleep first to align to next minute boundary for first round
         let delay_target = task_utils::next_aligned_instant(60);
@@ -386,7 +385,29 @@ async fn run_task_scheduler() {
             Ok(Err(err)) => eprintln!("task scheduler failed - {err:?}"),
             Ok(Ok(_)) => {}
         }
+
+        let now = proxmox_time::epoch_i64();
+        if now.saturating_sub(last_acme_check) >= 24 * 60 * 60 {
+            if let Err(err) = schedule_acme_renewal() {
+                log::error!("ACME certificate check failed - {err:#}");
+            }
+            last_acme_check = now;
+        }
     }
+}
+
+fn schedule_acme_renewal() -> Result<(), Error> {
+    let (cert_config, _digest) = pdm_config::certificate_config::config()?;
+    if cert_config.acme_domains().next().is_none()
+        || !server::api::nodes::certificates::cert_expires_soon()?
+    {
+        return Ok(());
+    }
+
+    let mut rpcenv = CliEnvironment::new();
+    rpcenv.set_auth_id(Some(String::from("admin@pdm")));
+    server::api::nodes::certificates::renew_acme_cert(false, &mut rpcenv)?;
+    Ok(())
 }
 
 async fn schedule_tasks() -> Result<(), Error> {

@@ -44,19 +44,13 @@ USR_BIN := \
 
 USR_SBIN := \
 	proxmox-datacenter-manager-admin \
-	pdmAtoB \
 
 SERVICE_BIN := \
 	proxmox-datacenter-api \
 	proxmox-datacenter-privileged-api \
 
-# for those binaries that are for internal use and e.g. have no command-line completion
-INTERNAL_SERVICE_BIN := \
-	proxmox-datacenter-manager-banner \
-	proxmox-datacenter-manager-daily-update \
-
 COMPILED_BINS := \
-	$(addprefix $(COMPILEDIR)/,$(USR_BIN) $(USR_SBIN) $(SERVICE_BIN) $(INTERNAL_SERVICE_BIN))
+	$(addprefix $(COMPILEDIR)/,$(USR_BIN) $(USR_SBIN) $(SERVICE_BIN))
 
 # completion helper get generated on build
 BASH_COMPLETIONS := $(addsuffix .bash,$(USR_BIN) $(USR_SBIN))
@@ -75,7 +69,7 @@ install: $(COMPILED_BINS) $(SHELL_COMPLETION_FILES)
 	$(foreach i,$(USR_SBIN), \
 	    install -m755 $(COMPILEDIR)/$(i) $(DESTDIR)$(SBINDIR)/ ;)
 	install -dm755 $(DESTDIR)$(LIBEXECDIR)/proxmox
-	$(foreach i,$(SERVICE_BIN) $(INTERNAL_SERVICE_BIN), \
+	$(foreach i,$(SERVICE_BIN), \
 	    install -m755 $(COMPILEDIR)/$(i) $(DESTDIR)$(LIBEXECDIR)/proxmox/ ;)
 	install -dm755 $(DESTDIR)$(BASHCOMPDIR)
 	$(foreach i,$(BASH_COMPLETIONS), \
@@ -83,7 +77,6 @@ install: $(COMPILED_BINS) $(SHELL_COMPLETION_FILES)
 	install -dm755 $(DESTDIR)$(ZSHCOMPDIR)
 	$(foreach i,$(ZSH_COMPLETIONS), \
 	    install -m644 $(COMPLETION_DIR)/$(i) $(DESTDIR)$(ZSHCOMPDIR)/ ;)
-	make -C services install
 	$(MAKE) -C docs install
 
 $(COMPILED_BINS) $(COMPILEDIR)/docgen &:

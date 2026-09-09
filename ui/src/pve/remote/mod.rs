@@ -9,6 +9,7 @@ use pwt::props::{ContainerBuilder, WidgetBuilder};
 use pwt::widget::{Fa, Row, TabBarItem, TabPanel};
 
 use crate::remotes::RemoteTaskList;
+use crate::pve::jobs::PveJobsPanel;
 
 #[derive(Clone, Debug, Eq, PartialEq, Properties)]
 pub struct PveRemotePanel {
@@ -53,6 +54,16 @@ impl yew::Component for PveRemotePanelComp {
             .class(pwt::css::FlexFit)
             .title(title)
             .class(ColorScheme::Neutral)
+            .with_item_builder(
+                TabBarItem::new()
+                    .key("jobs_view")
+                    .label(tr!("Jobs"))
+                    .icon_class("fa fa-calendar"),
+                {
+                    let remote = props.remote.clone();
+                    move |_| PveJobsPanel::new(remote.clone()).into()
+                },
+            )
             .with_item_builder(
                 TabBarItem::new()
                     .key("tasks_view")

@@ -3,21 +3,10 @@
 use proxmox_router::{Router, SubdirMap, list_subdirs_api_method};
 use proxmox_sortable_macro::sortable;
 
-pub mod apt;
 pub mod certificates;
 pub mod config;
-pub mod dns;
-pub mod journal;
-pub mod network;
-pub mod report;
-pub mod rrddata;
 pub mod sdn;
-pub mod status;
-pub mod subscription;
-pub mod syslog;
 pub mod tasks;
-pub mod termproxy;
-pub mod time;
 pub mod vncwebsocket;
 
 use anyhow::Error;
@@ -41,20 +30,8 @@ pub const ITEM_ROUTER: Router = Router::new()
 
 #[sortable]
 pub const SUBDIRS: SubdirMap = &sorted!([
-    ("apt", &apt::ROUTER),
     ("certificates", &certificates::ROUTER),
     ("config", &config::ROUTER),
-    ("dns", &dns::ROUTER),
-    ("journal", &journal::ROUTER),
-    ("network", &network::ROUTER),
-    ("report", &report::ROUTER),
-    ("rrddata", &rrddata::ROUTER),
     ("sdn", &sdn::ROUTER),
-    ("subscription", &subscription::ROUTER),
-    ("status", &status::ROUTER),
-    ("syslog", &syslog::ROUTER),
     ("tasks", &tasks::ROUTER),
-    ("termproxy", &termproxy::ROUTER),
-    ("time", &time::ROUTER),
-    ("vncwebsocket", &vncwebsocket::ROUTER),
 ]);

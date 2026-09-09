@@ -242,9 +242,8 @@ Automatic renewal of ACME certificates
 ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
 
 If a node has been successfully configured with an ACME-provided certificate, the certificate will
-be renewed automatically by the ``proxmox-datacenter-manager-daily-update.service``.  Currently,
-renewal is triggered if the certificate either has already expired or if it will expire in the next
-30 days.
+be checked daily by the internal maintenance scheduler. Renewal is triggered if the certificate
+either has already expired or if it will expire in the next 30 days.
 
 .. _manually_change_certificate_over_command_line:
 

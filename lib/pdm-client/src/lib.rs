@@ -30,6 +30,19 @@ use types::*;
 pub mod types {
     pub use proxmox_access_control::types::{User, UserWithTokens};
 
+    pub use pdm_api_types::guest::{CloneLxc, CloneQemu, CreateLxc, CreateQemu, UpdateLxc, UpdateQemu};
+    pub use pdm_api_types::media::{
+        MediaCatalogEntry, MediaCatalogEntryUpdater, MediaContentType, PveDownloadUrl,
+        PveStorageContent,
+    };
+    pub use pdm_api_types::pve_jobs::{
+        PveBackupJob, PveBackupJobConfig, PveReplicationJob, PveReplicationJobConfig,
+        PveReplicationStatus, PveVzdumpRequest,
+    };
+    pub use pdm_api_types::pbs_jobs::{
+        PbsGcStatus, PbsPruneJob, PbsPruneRequest, PbsPruneResult, PbsSnapshotNotes,
+        PbsSnapshotProtection, PbsSnapshotRef, PbsSyncJob, PbsVerifyJob,
+    };
     pub use pdm_api_types::remotes::Remote;
     pub use pdm_api_types::{AclListItem, Authid, ConfigurationState, RemoteUpid};
 
@@ -121,6 +134,39 @@ pub struct PveListStoragesFilter {
 }
 
 impl<T: HttpApiClient> PdmClient<T> {
+    pub async fn list_media(&self) -> Result<Vec<MediaCatalogEntry>, Error> {
+        Ok(self
+            .0
+            .get("/api2/extjs/config/media")
+            .await?
+            .expect_json()?
+            .data)
+    }
+
+    pub async fn add_media(&self, entry: &MediaCatalogEntry) -> Result<(), Error> {
+        self.0
+            .post("/api2/extjs/config/media", entry)
+            .await?
+            .nodata()?;
+        Ok(())
+    }
+
+    pub async fn update_media(
+        &self,
+        id: &str,
+        entry: &MediaCatalogEntryUpdater,
+    ) -> Result<(), Error> {
+        let path = format!("/api2/extjs/config/media/{id}");
+        self.0.put(&path, entry).await?.nodata()?;
+        Ok(())
+    }
+
+    pub async fn delete_media(&self, id: &str) -> Result<(), Error> {
+        let path = format!("/api2/extjs/config/media/{id}");
+        self.0.delete(&path).await?.nodata()?;
+        Ok(())
+    }
+
     pub async fn list_remotes(&self) -> Result<Vec<Remote>, Error> {
         Ok(self
             .0
@@ -419,19 +465,6 @@ impl<T: HttpApiClient> PdmClient<T> {
     ) -> Result<Vec<pdm_api_types::RemoteMetricCollectionStatus>, Error> {
         let path = "/api2/extjs/remotes/metric-collection/status";
         Ok(self.0.get(path).await?.expect_json()?.data)
-    }
-
-    /// Get PDM node RRD data.
-    pub async fn get_pdm_node_rrddata(
-        &self,
-        mode: RrdMode,
-        timeframe: RrdTimeframe,
-    ) -> Result<Vec<pdm_api_types::rrddata::PdmNodeDatapoint>, Error> {
-        let path = ApiPathBuilder::new("/api2/extjs/nodes/localhost/rrddata")
-            .arg("cf", mode)
-            .arg("timeframe", timeframe)
-            .build();
-        Ok(self.0.get(&path).await?.expect_json()?.data)
     }
 
     /// Get per-remote RRD data.
@@ -765,6 +798,91 @@ impl<T: HttpApiClient> PdmClient<T> {
             .await
     }
 
+    pub async fn pve_qemu_reboot(
+        &self,
+        remote: &str,
+        node: Option<&str>,
+        vmid: u32,
+    ) -> Result<RemoteUpid, Error> {
+        self.pve_change_guest_status(remote, node, vmid, "qemu", "reboot")
+            .await
+    }
+
+    pub async fn pve_qemu_reset(
+        &self,
+        remote: &str,
+        node: Option<&str>,
+        vmid: u32,
+    ) -> Result<RemoteUpid, Error> {
+        self.pve_change_guest_status(remote, node, vmid, "qemu", "reset")
+            .await
+    }
+
+    pub async fn pve_qemu_suspend(
+        &self,
+        remote: &str,
+        node: Option<&str>,
+        vmid: u32,
+    ) -> Result<RemoteUpid, Error> {
+        self.pve_change_guest_status(remote, node, vmid, "qemu", "suspend")
+            .await
+    }
+
+    pub async fn pve_qemu_template(
+        &self,
+        remote: &str,
+        node: Option<&str>,
+        vmid: u32,
+    ) -> Result<RemoteUpid, Error> {
+        self.pve_change_guest_status(remote, node, vmid, "qemu", "template")
+            .await
+    }
+
+    pub async fn pve_delete_qemu(
+        &self,
+        remote: &str,
+        node: Option<&str>,
+        vmid: u32,
+    ) -> Result<RemoteUpid, Error> {
+        let path = ApiPathBuilder::new(format!(
+            "/api2/extjs/pve/remotes/{remote}/qemu/{vmid}"
+        ))
+        .maybe_arg("node", &node)
+        .build();
+        Ok(self.0.delete(&path).await?.expect_json()?.data)
+    }
+
+    pub async fn pve_update_qemu(
+        &self,
+        remote: &str,
+        node: Option<&str>,
+        vmid: u32,
+        config: &UpdateQemu,
+    ) -> Result<(), Error> {
+        let path = ApiPathBuilder::new(format!(
+            "/api2/extjs/pve/remotes/{remote}/qemu/{vmid}/config"
+        ))
+        .maybe_arg("node", &node)
+        .build();
+        self.0.put(&path, config).await?.nodata()?;
+        Ok(())
+    }
+
+    pub async fn pve_clone_qemu(
+        &self,
+        remote: &str,
+        node: Option<&str>,
+        vmid: u32,
+        config: &CloneQemu,
+    ) -> Result<RemoteUpid, Error> {
+        let path = ApiPathBuilder::new(format!(
+            "/api2/extjs/pve/remotes/{remote}/qemu/{vmid}/clone"
+        ))
+        .maybe_arg("node", &node)
+        .build();
+        Ok(self.0.post(&path, config).await?.expect_json()?.data)
+    }
+
     pub async fn pve_qemu_list_snapshots(
         &self,
         remote: &str,
@@ -1050,6 +1168,60 @@ impl<T: HttpApiClient> PdmClient<T> {
             .await
     }
 
+        pub async fn pve_lxc_reboot(
+            &self,
+            remote: &str,
+            node: Option<&str>,
+            vmid: u32,
+        ) -> Result<RemoteUpid, Error> {
+            self.pve_change_guest_status(remote, node, vmid, "lxc", "reboot")
+                .await
+        }
+
+        pub async fn pve_lxc_resume(
+            &self,
+            remote: &str,
+            node: Option<&str>,
+            vmid: u32,
+        ) -> Result<RemoteUpid, Error> {
+            self.pve_change_guest_status(remote, node, vmid, "lxc", "resume")
+                .await
+        }
+
+        pub async fn pve_lxc_suspend(
+            &self,
+            remote: &str,
+            node: Option<&str>,
+            vmid: u32,
+        ) -> Result<RemoteUpid, Error> {
+            self.pve_change_guest_status(remote, node, vmid, "lxc", "suspend")
+                .await
+        }
+
+        pub async fn pve_lxc_template(
+            &self,
+            remote: &str,
+            node: Option<&str>,
+            vmid: u32,
+        ) -> Result<RemoteUpid, Error> {
+            self.pve_change_guest_status(remote, node, vmid, "lxc", "template")
+                .await
+        }
+
+        pub async fn pve_delete_lxc(
+            &self,
+            remote: &str,
+            node: Option<&str>,
+            vmid: u32,
+        ) -> Result<RemoteUpid, Error> {
+            let path = ApiPathBuilder::new(format!(
+                "/api2/extjs/pve/remotes/{remote}/lxc/{vmid}"
+            ))
+            .maybe_arg("node", &node)
+            .build();
+            Ok(self.0.delete(&path).await?.expect_json()?.data)
+        }
+
     pub async fn pve_lxc_migrate(
         &self,
         remote: &str,
@@ -1116,6 +1288,37 @@ impl<T: HttpApiClient> PdmClient<T> {
         let path = format!("/api2/extjs/pve/remotes/{remote}/tasks/{upid}");
         #[allow(clippy::unit_arg)]
         Ok(self.0.delete(&path).await?.expect_json()?.data)
+    }
+
+    pub async fn pve_update_lxc(
+        &self,
+        remote: &str,
+        node: Option<&str>,
+        vmid: u32,
+        config: &UpdateLxc,
+    ) -> Result<(), Error> {
+        let path = ApiPathBuilder::new(format!(
+            "/api2/extjs/pve/remotes/{remote}/lxc/{vmid}/config"
+        ))
+        .maybe_arg("node", &node)
+        .build();
+        self.0.put(&path, config).await?.nodata()?;
+        Ok(())
+    }
+
+    pub async fn pve_clone_lxc(
+        &self,
+        remote: &str,
+        node: Option<&str>,
+        vmid: u32,
+        config: &CloneLxc,
+    ) -> Result<RemoteUpid, Error> {
+        let path = ApiPathBuilder::new(format!(
+            "/api2/extjs/pve/remotes/{remote}/lxc/{vmid}/clone"
+        ))
+        .maybe_arg("node", &node)
+        .build();
+        Ok(self.0.post(&path, config).await?.expect_json()?.data)
     }
 
     pub async fn pve_task_status(
@@ -1678,6 +1881,347 @@ impl<T: HttpApiClient> PdmClient<T> {
         Ok(self.0.get(&path).await?.expect_json()?.data)
     }
 
+    pub async fn pve_create_qemu(
+        &self,
+        remote: &str,
+        node: &str,
+        config: &CreateQemu,
+    ) -> Result<RemoteUpid, Error> {
+        let path = format!("/api2/extjs/pve/remotes/{remote}/qemu?node={node}");
+        Ok(self
+            .0
+            .post(&path, config)
+            .await?
+            .expect_json()?
+            .data)
+    }
+
+    pub async fn pve_create_lxc(
+        &self,
+        remote: &str,
+        node: &str,
+        config: &CreateLxc,
+    ) -> Result<RemoteUpid, Error> {
+        let path = format!("/api2/extjs/pve/remotes/{remote}/lxc?node={node}");
+        Ok(self
+            .0
+            .post(&path, config)
+            .await?
+            .expect_json()?
+            .data)
+    }
+
+    pub async fn pve_list_backup_jobs(&self, remote: &str) -> Result<Vec<PveBackupJob>, Error> {
+        let path = format!("/api2/extjs/pve/remotes/{remote}/backup");
+        Ok(self.0.get(&path).await?.expect_json()?.data)
+    }
+
+    pub async fn pve_create_backup_job(
+        &self,
+        remote: &str,
+        config: &PveBackupJobConfig,
+    ) -> Result<(), Error> {
+        let path = format!("/api2/extjs/pve/remotes/{remote}/backup");
+        self.0.post(&path, config).await?.nodata()?;
+        Ok(())
+    }
+
+    pub async fn pve_update_backup_job(
+        &self,
+        remote: &str,
+        id: &str,
+        config: &PveBackupJobConfig,
+    ) -> Result<(), Error> {
+        let path = format!("/api2/extjs/pve/remotes/{remote}/backup/{id}");
+        self.0.put(&path, config).await?.nodata()?;
+        Ok(())
+    }
+
+    pub async fn pve_delete_backup_job(&self, remote: &str, id: &str) -> Result<(), Error> {
+        let path = format!("/api2/extjs/pve/remotes/{remote}/backup/{id}");
+        self.0.delete(&path).await?.nodata()?;
+        Ok(())
+    }
+
+    pub async fn pve_run_vzdump(
+        &self,
+        remote: &str,
+        request: &PveVzdumpRequest,
+    ) -> Result<RemoteUpid, Error> {
+        let path = format!("/api2/extjs/pve/remotes/{remote}/vzdump");
+        Ok(self
+            .0
+            .post(&path, request)
+            .await?
+            .expect_json()?
+            .data)
+    }
+
+    pub async fn pve_list_replication_jobs(
+        &self,
+        remote: &str,
+    ) -> Result<Vec<PveReplicationJob>, Error> {
+        let path = format!("/api2/extjs/pve/remotes/{remote}/replication");
+        Ok(self.0.get(&path).await?.expect_json()?.data)
+    }
+
+    pub async fn pve_create_replication_job(
+        &self,
+        remote: &str,
+        config: &PveReplicationJobConfig,
+    ) -> Result<(), Error> {
+        let path = format!("/api2/extjs/pve/remotes/{remote}/replication");
+        self.0.post(&path, config).await?.nodata()?;
+        Ok(())
+    }
+
+    pub async fn pve_update_replication_job(
+        &self,
+        remote: &str,
+        id: &str,
+        config: &PveReplicationJobConfig,
+    ) -> Result<(), Error> {
+        let path = format!("/api2/extjs/pve/remotes/{remote}/replication/{id}");
+        self.0.put(&path, config).await?.nodata()?;
+        Ok(())
+    }
+
+    pub async fn pve_delete_replication_job(
+        &self,
+        remote: &str,
+        id: &str,
+    ) -> Result<(), Error> {
+        let path = format!("/api2/extjs/pve/remotes/{remote}/replication/{id}");
+        self.0.delete(&path).await?.nodata()?;
+        Ok(())
+    }
+
+    pub async fn pve_replication_status(
+        &self,
+        remote: &str,
+        id: &str,
+        node: &str,
+    ) -> Result<PveReplicationStatus, Error> {
+        let path = ApiPathBuilder::new(format!(
+            "/api2/extjs/pve/remotes/{remote}/replication/{id}/status"
+        ))
+        .arg("node", node)
+        .build();
+        Ok(self.0.get(&path).await?.expect_json()?.data)
+    }
+
+    pub async fn pve_run_replication_job(
+        &self,
+        remote: &str,
+        id: &str,
+        node: &str,
+    ) -> Result<RemoteUpid, Error> {
+        let path = ApiPathBuilder::new(format!(
+            "/api2/extjs/pve/remotes/{remote}/replication/{id}/run"
+        ))
+        .arg("node", node)
+        .build();
+        Ok(self
+            .0
+            .post(&path, &json!({}))
+            .await?
+            .expect_json()?
+            .data)
+    }
+
+    pub async fn pbs_list_prune_jobs(&self, remote: &str) -> Result<Vec<PbsPruneJob>, Error> {
+        let path = format!("/api2/extjs/pbs/remotes/{remote}/prune-jobs");
+        Ok(self.0.get(&path).await?.expect_json()?.data)
+    }
+
+    pub async fn pbs_create_prune_job(
+        &self,
+        remote: &str,
+        job: &PbsPruneJob,
+    ) -> Result<(), Error> {
+        let path = format!("/api2/extjs/pbs/remotes/{remote}/prune-jobs");
+        self.0.post(&path, job).await?.nodata()?;
+        Ok(())
+    }
+
+    pub async fn pbs_update_prune_job(
+        &self,
+        remote: &str,
+        id: &str,
+        job: &PbsPruneJob,
+    ) -> Result<(), Error> {
+        let path = format!("/api2/extjs/pbs/remotes/{remote}/prune-jobs/{id}");
+        self.0.put(&path, job).await?.nodata()?;
+        Ok(())
+    }
+
+    pub async fn pbs_delete_prune_job(&self, remote: &str, id: &str) -> Result<(), Error> {
+        let path = format!("/api2/extjs/pbs/remotes/{remote}/prune-jobs/{id}");
+        self.0.delete(&path).await?.nodata()?;
+        Ok(())
+    }
+
+    pub async fn pbs_run_prune_job(&self, remote: &str, id: &str) -> Result<RemoteUpid, Error> {
+        let path = format!("/api2/extjs/pbs/remotes/{remote}/prune-jobs/{id}/run");
+        Ok(self.0.post(&path, &json!({})).await?.expect_json()?.data)
+    }
+
+    pub async fn pbs_list_verify_jobs(&self, remote: &str) -> Result<Vec<PbsVerifyJob>, Error> {
+        let path = format!("/api2/extjs/pbs/remotes/{remote}/verify-jobs");
+        Ok(self.0.get(&path).await?.expect_json()?.data)
+    }
+
+    pub async fn pbs_create_verify_job(
+        &self,
+        remote: &str,
+        job: &PbsVerifyJob,
+    ) -> Result<(), Error> {
+        let path = format!("/api2/extjs/pbs/remotes/{remote}/verify-jobs");
+        self.0.post(&path, job).await?.nodata()?;
+        Ok(())
+    }
+
+    pub async fn pbs_update_verify_job(
+        &self,
+        remote: &str,
+        id: &str,
+        job: &PbsVerifyJob,
+    ) -> Result<(), Error> {
+        let path = format!("/api2/extjs/pbs/remotes/{remote}/verify-jobs/{id}");
+        self.0.put(&path, job).await?.nodata()?;
+        Ok(())
+    }
+
+    pub async fn pbs_delete_verify_job(&self, remote: &str, id: &str) -> Result<(), Error> {
+        let path = format!("/api2/extjs/pbs/remotes/{remote}/verify-jobs/{id}");
+        self.0.delete(&path).await?.nodata()?;
+        Ok(())
+    }
+
+    pub async fn pbs_run_verify_job(&self, remote: &str, id: &str) -> Result<RemoteUpid, Error> {
+        let path = format!("/api2/extjs/pbs/remotes/{remote}/verify-jobs/{id}/run");
+        Ok(self.0.post(&path, &json!({})).await?.expect_json()?.data)
+    }
+
+    pub async fn pbs_list_sync_jobs(&self, remote: &str) -> Result<Vec<PbsSyncJob>, Error> {
+        let path = format!("/api2/extjs/pbs/remotes/{remote}/sync-jobs");
+        Ok(self.0.get(&path).await?.expect_json()?.data)
+    }
+
+    pub async fn pbs_create_sync_job(
+        &self,
+        remote: &str,
+        job: &PbsSyncJob,
+    ) -> Result<(), Error> {
+        let path = format!("/api2/extjs/pbs/remotes/{remote}/sync-jobs");
+        self.0.post(&path, job).await?.nodata()?;
+        Ok(())
+    }
+
+    pub async fn pbs_update_sync_job(
+        &self,
+        remote: &str,
+        id: &str,
+        job: &PbsSyncJob,
+    ) -> Result<(), Error> {
+        let path = format!("/api2/extjs/pbs/remotes/{remote}/sync-jobs/{id}");
+        self.0.put(&path, job).await?.nodata()?;
+        Ok(())
+    }
+
+    pub async fn pbs_delete_sync_job(&self, remote: &str, id: &str) -> Result<(), Error> {
+        let path = format!("/api2/extjs/pbs/remotes/{remote}/sync-jobs/{id}");
+        self.0.delete(&path).await?.nodata()?;
+        Ok(())
+    }
+
+    pub async fn pbs_run_sync_job(&self, remote: &str, id: &str) -> Result<RemoteUpid, Error> {
+        let path = format!("/api2/extjs/pbs/remotes/{remote}/sync-jobs/{id}/run");
+        Ok(self.0.post(&path, &json!({})).await?.expect_json()?.data)
+    }
+
+    pub async fn pbs_datastore_gc_status(
+        &self,
+        remote: &str,
+        datastore: &str,
+    ) -> Result<PbsGcStatus, Error> {
+        let path = format!(
+            "/api2/extjs/pbs/remotes/{remote}/datastore/{datastore}/maintenance/gc"
+        );
+        Ok(self.0.get(&path).await?.expect_json()?.data)
+    }
+
+    pub async fn pbs_run_datastore_gc(
+        &self,
+        remote: &str,
+        datastore: &str,
+    ) -> Result<RemoteUpid, Error> {
+        let path = format!(
+            "/api2/extjs/pbs/remotes/{remote}/datastore/{datastore}/maintenance/gc"
+        );
+        Ok(self.0.post(&path, &json!({})).await?.expect_json()?.data)
+    }
+
+    pub async fn pbs_prune_datastore(
+        &self,
+        remote: &str,
+        datastore: &str,
+        request: &PbsPruneRequest,
+    ) -> Result<Vec<PbsPruneResult>, Error> {
+        let path = format!(
+            "/api2/extjs/pbs/remotes/{remote}/datastore/{datastore}/maintenance/prune"
+        );
+        Ok(self.0.post(&path, request).await?.expect_json()?.data)
+    }
+
+    pub async fn pbs_set_snapshot_protection(
+        &self,
+        remote: &str,
+        datastore: &str,
+        request: &PbsSnapshotProtection,
+    ) -> Result<(), Error> {
+        let path = format!("/api2/extjs/pbs/remotes/{remote}/datastore/{datastore}/snapshot-actions/protected");
+        self.0.put(&path, request).await?.nodata()?;
+        Ok(())
+    }
+
+    pub async fn pbs_set_snapshot_notes(
+        &self,
+        remote: &str,
+        datastore: &str,
+        request: &PbsSnapshotNotes,
+    ) -> Result<(), Error> {
+        let path = format!("/api2/extjs/pbs/remotes/{remote}/datastore/{datastore}/snapshot-actions/notes");
+        self.0.put(&path, request).await?.nodata()?;
+        Ok(())
+    }
+
+    pub async fn pbs_verify_snapshot(
+        &self,
+        remote: &str,
+        datastore: &str,
+        snapshot: &PbsSnapshotRef,
+    ) -> Result<RemoteUpid, Error> {
+        let path = format!("/api2/extjs/pbs/remotes/{remote}/datastore/{datastore}/snapshot-actions/verify");
+        Ok(self.0.post(&path, snapshot).await?.expect_json()?.data)
+    }
+
+    pub async fn pbs_forget_snapshot(
+        &self,
+        remote: &str,
+        datastore: &str,
+        snapshot: &PbsSnapshotRef,
+    ) -> Result<(), Error> {
+        let path = ApiPathBuilder::new(format!("/api2/extjs/pbs/remotes/{remote}/datastore/{datastore}/snapshot-actions/forget"))
+            .arg("backup-type", &snapshot.backup_type)
+            .arg("backup-id", &snapshot.backup_id)
+            .arg("backup-time", snapshot.backup_time)
+            .maybe_arg("ns", &snapshot.ns)
+            .build();
+        self.0.delete(&path).await?.nodata()?;
+        Ok(())
+    }
+
     /// List storages for a given PVE remote node.
     ///
     /// The storages can be filtered using the `filter` parameter, for details see
@@ -1717,6 +2261,40 @@ impl<T: HttpApiClient> PdmClient<T> {
         let path =
             format!("/api2/extjs/pve/remotes/{remote}/nodes/{node}/storage/{storage}/status");
         Ok(self.0.get(&path).await?.expect_json()?.data)
+    }
+
+    pub async fn pve_list_storage_content(
+        &self,
+        remote: &str,
+        node: &str,
+        storage: &str,
+        content: MediaContentType,
+    ) -> Result<Vec<PveStorageContent>, Error> {
+        let path = ApiPathBuilder::new(format!(
+            "/api2/extjs/pve/remotes/{remote}/nodes/{node}/storage/{storage}/content"
+        ))
+        .arg("content", content)
+        .build();
+
+        Ok(self.0.get(&path).await?.expect_json()?.data)
+    }
+
+    pub async fn pve_download_storage_content(
+        &self,
+        remote: &str,
+        node: &str,
+        storage: &str,
+        download: &PveDownloadUrl,
+    ) -> Result<RemoteUpid, Error> {
+        let path =
+            format!("/api2/extjs/pve/remotes/{remote}/nodes/{node}/storage/{storage}/download-url");
+
+        Ok(self
+            .0
+            .post(&path, download)
+            .await?
+            .expect_json()?
+            .data)
     }
 
     pub async fn pve_storage_rrddata(
@@ -1936,16 +2514,6 @@ impl<T: HttpApiClient> PdmClient<T> {
         Ok(self
             .0
             .post_without_body("/api2/extjs/remotes/updates/refresh")
-            .await?
-            .expect_json()?
-            .data)
-    }
-
-    /// Get remote update summary.
-    pub async fn generate_system_report(&self) -> Result<String, Error> {
-        Ok(self
-            .0
-            .get("/api2/extjs/nodes/localhost/report")
             .await?
             .expect_json()?
             .data)

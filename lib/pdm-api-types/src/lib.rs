@@ -16,6 +16,8 @@ mod acl;
 pub use acl::*;
 
 pub mod pbs;
+pub mod pbs_jobs;
+pub mod pve_jobs;
 
 mod node_config;
 pub use node_config::*;
@@ -105,6 +107,10 @@ pub mod auto_installer;
 pub mod ceph;
 
 pub mod firewall;
+
+pub mod guest;
+
+pub mod media;
 
 pub mod remotes;
 
@@ -348,8 +354,6 @@ pub const NODE_TASKS_LIST_TASKS_RETURN_TYPE: ReturnType = ReturnType::new(
 #[serde(rename_all = "lowercase")]
 /// type of the realm
 pub enum RealmType {
-    /// The PAM realm
-    Pam,
     /// The PDM realm
     Pdm,
     /// An OpenID Connect realm
@@ -389,54 +393,6 @@ pub struct BasicRealmInfo {
     pub default: Option<bool>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub comment: Option<String>,
-}
-
-#[api(
-    properties: {
-        realm: {
-            schema: REALM_ID_SCHEMA,
-        },
-        "type": {
-            type: RealmType,
-        },
-        comment: {
-            optional: true,
-            schema: SINGLE_LINE_COMMENT_SCHEMA,
-        },
-        "default": {
-            optional: true,
-            default: false,
-        },
-    }
-)]
-#[derive(Serialize, Deserialize, Updater, Clone)]
-#[serde(rename_all = "kebab-case")]
-/// Built-in PAM realm configuration properties.
-pub struct PamRealmConfig {
-    /// Realm name. Always "pam".
-    #[updater(skip)]
-    pub realm: String,
-    /// Realm type. Always [`RealmType::Pam`].
-    #[updater(skip)]
-    #[serde(rename = "type")]
-    pub ty: RealmType,
-    /// Comment for this realm
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub comment: Option<String>,
-    /// True if you want this to be the default realm selected on login.
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub default: Option<bool>,
-}
-
-impl Default for PamRealmConfig {
-    fn default() -> Self {
-        Self {
-            realm: "pam".to_owned(),
-            ty: RealmType::Pam,
-            comment: Some("Linux PAM standard authentication".to_owned()),
-            default: None,
-        }
-    }
 }
 
 #[api(

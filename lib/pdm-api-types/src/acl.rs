@@ -74,7 +74,7 @@ mod roles {
     use super::*;
 
     /// Admin always has all privileges. It can do everything except a few actions
-    /// which are limited to the 'root@pam` superuser
+    /// which are limited to the `admin@pdm` superuser.
     pub const ROLE_ADMINISTRATOR: u64 = u64::MAX;
 
     /// NoAccess can be used to remove privileges from specific (sub-)paths
@@ -217,7 +217,7 @@ impl proxmox_access_control::init::AccessControlConfig for AccessControlConfig {
     }
 
     fn is_superuser(&self, auth_id: &Authid) -> bool {
-        !auth_id.is_token() && auth_id.user() == "root@pam"
+        !auth_id.is_token() && auth_id.user() == "admin@pdm"
     }
 
     fn role_admin(&self) -> Option<&str> {
@@ -225,14 +225,14 @@ impl proxmox_access_control::init::AccessControlConfig for AccessControlConfig {
     }
 
     fn init_user_config(&self, config: &mut SectionConfigData) -> Result<(), Error> {
-        if !config.sections.contains_key("root@pam") {
+        if !config.sections.contains_key("admin@pdm") {
             config
                 .set_data(
-                    "root@pam",
+                    "admin@pdm",
                     "user",
                     User {
-                        userid: "root@pam".parse().expect("invalid user id"),
-                        comment: Some("Superuser".to_string()),
+                        userid: "admin@pdm".parse().expect("invalid user id"),
+                        comment: Some("Container administrator".to_string()),
                         enable: None,
                         expire: None,
                         firstname: None,

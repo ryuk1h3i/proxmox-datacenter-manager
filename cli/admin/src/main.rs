@@ -1,21 +1,13 @@
 use core::matches;
 
 use anyhow::{Context, Error};
-use serde_json::{Value, json};
 
-use proxmox_router::RpcEnvironment;
-use proxmox_router::cli::{
-    CliCommand, CliCommandMap, CliEnvironment, ColumnConfig, OUTPUT_FORMAT,
-    default_table_format_options, format_and_print_result_full, get_output_format,
-    run_async_cli_command,
-};
-use proxmox_schema::api;
+use proxmox_router::cli::{CliCommandMap, CliEnvironment, run_async_cli_command};
 use proxmox_sys::fs::CreateOptions;
 
 mod acme;
 mod cert;
 mod remotes;
-mod support_status;
 
 async fn run() -> Result<(), Error> {
     let api_user = pdm_config::api_user().context("could not get api user")?;
@@ -41,13 +33,7 @@ async fn run() -> Result<(), Error> {
     let cmd_def = CliCommandMap::new()
         .insert("acme", acme::acme_mgmt_cli())
         .insert("cert", cert::cert_mgmt_cli())
-        .insert("remote", remotes::cli())
-        .insert(
-            "report",
-            CliCommand::new(&API_METHOD_GENERATE_SYSTEM_REPORT),
-        )
-        .insert("support-status", support_status::cli())
-        .insert("versions", CliCommand::new(&API_METHOD_GET_VERSIONS));
+        .insert("remote", remotes::cli());
 
     let args: Vec<String> = std::env::args().collect();
     let avoid_init = matches!(
@@ -69,7 +55,7 @@ async fn run() -> Result<(), Error> {
     }
 
     let mut rpcenv = CliEnvironment::new();
-    rpcenv.set_auth_id(Some("root@pam".into()));
+    rpcenv.set_auth_id(Some("admin@pdm".into()));
 
     run_async_cli_command(cmd_def, rpcenv).await;
 
@@ -79,53 +65,4 @@ async fn run() -> Result<(), Error> {
 fn main() -> Result<(), Error> {
     //pbs_tools::setup_libc_malloc_opts(); // TODO: move from PBS to proxmox-sys and uncomment
     proxmox_async::runtime::main(run())
-}
-
-#[api(
-    input: {
-        properties: {
-            verbose: {
-                type: Boolean,
-                optional: true,
-                default: false,
-                description: "Output verbose package information. It is ignored if output-format is specified.",
-            },
-            "output-format": {
-                schema: OUTPUT_FORMAT,
-                optional: true,
-            }
-        }
-    }
-)]
-/// List package versions for important Proxmox Datacenter Manager packages.
-async fn get_versions(verbose: bool, param: Value) -> Result<Value, anyhow::Error> {
-    let output_format = get_output_format(&param);
-
-    let packages = server::api::nodes::apt::get_versions()?;
-    let mut packages = json!(if verbose {
-        &packages[..]
-    } else {
-        &packages[1..2]
-    });
-
-    let options = default_table_format_options()
-        .disable_sort()
-        .noborder(true) // just not helpful for version info which gets copy pasted often
-        .column(ColumnConfig::new("Package"))
-        .column(ColumnConfig::new("Version"))
-        .column(ColumnConfig::new("ExtraInfo").header("Extra Info"));
-    let return_type = &server::api::nodes::apt::API_METHOD_GET_VERSIONS.returns;
-
-    format_and_print_result_full(&mut packages, return_type, &output_format, &options);
-
-    Ok(Value::Null)
-}
-
-#[api]
-/// Generate the system report.
-async fn generate_system_report() -> Result<(), anyhow::Error> {
-    let report = server::api::nodes::report::generate_system_report()?;
-    print!("{report}");
-
-    Ok(())
 }

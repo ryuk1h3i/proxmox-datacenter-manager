@@ -7,9 +7,7 @@ use proxmox_ldap::types::{AdRealmConfig, LdapRealmConfig};
 use proxmox_schema::{ApiType, Schema};
 use proxmox_section_config::{SectionConfig, SectionConfigData, SectionConfigPlugin};
 
-use pdm_api_types::{
-    ConfigDigest, OpenIdRealmConfig, PamRealmConfig, PdmRealmConfig, REALM_ID_SCHEMA,
-};
+use pdm_api_types::{ConfigDigest, OpenIdRealmConfig, PdmRealmConfig, REALM_ID_SCHEMA};
 use proxmox_product_config::{ApiLockGuard, open_api_lockfile, replace_privileged_config};
 
 use pdm_buildcfg::configdir;
@@ -18,13 +16,6 @@ pub static CONFIG: LazyLock<SectionConfig> = LazyLock::new(init);
 
 fn init() -> SectionConfig {
     let mut config = SectionConfig::new(&REALM_ID_SCHEMA);
-
-    let plugin = SectionConfigPlugin::new(
-        "pam".to_owned(),
-        Some("realm".to_owned()),
-        PamRealmConfig::API_SCHEMA.unwrap_object_schema(),
-    );
-    config.register_plugin(plugin);
 
     let plugin = SectionConfigPlugin::new(
         "pdm".to_owned(),
@@ -128,14 +119,10 @@ pub fn exists(domains: &SectionConfigData, realm: &str) -> bool {
     domains.sections.contains_key(realm)
 }
 
-/// Add the pam and pdm realms to the config if they don't exist. These should always be added.
+/// Add the built-in PDM realm to the config if it does not exist.
 pub fn add_default_realms() -> Result<(), Error> {
     let _lock = lock_config()?;
     let (mut domains, _) = config()?;
-
-    if !exists(&domains, "pam") {
-        domains.set_data("pam", "pam", PamRealmConfig::default())?;
-    }
 
     if !exists(&domains, "pdm") {
         domains.set_data("pdm", "pdm", PdmRealmConfig::default())?;

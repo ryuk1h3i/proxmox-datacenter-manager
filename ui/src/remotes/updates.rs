@@ -36,10 +36,7 @@ use pwt::{
     },
 };
 
-use crate::{
-    check_pdm_subscription, get_deep_url, get_deep_url_low_level, pdm_client,
-    pdm_subscription_alert,
-};
+use crate::{get_deep_url, get_deep_url_low_level, pdm_client};
 
 #[derive(PartialEq, Properties)]
 pub struct UpdateTree {}
@@ -126,7 +123,6 @@ enum RemoteUpdateTreeMsg {
     KeySelected(Option<Key>),
     RefreshAll,
     RefreshFinished,
-    CheckSubscription,
 }
 
 struct UpdateTreeComponent {
@@ -323,15 +319,10 @@ fn build_store_from_response(update_summary: UpdateSummary) -> SlabTree<UpdateTr
     tree
 }
 
-#[derive(PartialEq)]
-enum ViewState {
-    ShowSubscriptionAlert,
-}
-
 impl LoadableComponent for UpdateTreeComponent {
     type Properties = UpdateTree;
     type Message = RemoteUpdateTreeMsg;
-    type ViewState = ViewState;
+    type ViewState = ();
 
     fn create(ctx: &LoadableComponentContext<Self>) -> Self {
         let link = ctx.link();
@@ -370,23 +361,6 @@ impl LoadableComponent for UpdateTreeComponent {
         })
     }
 
-    fn dialog_view(
-        &self,
-        ctx: &LoadableComponentContext<Self>,
-        view_state: &Self::ViewState,
-    ) -> Option<Html> {
-        let link = ctx.link().clone();
-        match view_state {
-            ViewState::ShowSubscriptionAlert => Some(
-                pdm_subscription_alert(move |_| {
-                    link.change_view(None);
-                    link.send_message(RemoteUpdateTreeMsg::RefreshAll);
-                })
-                .into(),
-            ),
-        }
-    }
-
     fn update(&mut self, ctx: &LoadableComponentContext<Self>, msg: Self::Message) -> bool {
         match msg {
             Self::Message::LoadFinished(updates) => {
@@ -410,21 +384,6 @@ impl LoadableComponent for UpdateTreeComponent {
 
                     return true;
                 }
-            }
-            Self::Message::CheckSubscription => {
-                let link = ctx.link().clone();
-
-                self.refreshing = true;
-                link.clone().spawn(async move {
-                    // Use the PDM subscription check for the global refresh all.
-                    let is_active = check_pdm_subscription().await;
-                    if !is_active {
-                        link.change_view(Some(ViewState::ShowSubscriptionAlert));
-                    } else {
-                        link.send_message(RemoteUpdateTreeMsg::RefreshAll);
-                    }
-                    link.send_message(RemoteUpdateTreeMsg::RefreshFinished);
-                });
             }
             Self::Message::RefreshAll => {
                 let link = ctx.link().clone();
@@ -472,7 +431,7 @@ impl UpdateTreeComponent {
             .on_activate({
                 let link = ctx.link().clone();
                 move |_| {
-                    link.send_message(RemoteUpdateTreeMsg::CheckSubscription);
+                    link.send_message(RemoteUpdateTreeMsg::RefreshAll);
                 }
             });
 

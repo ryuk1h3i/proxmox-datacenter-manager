@@ -31,7 +31,6 @@ in the section entitled "GNU Free Documentation License".
    views.rst
    subscription-registry.rst
    access-control.rst
-   sysadmin.rst
    faq.rst
 
 .. raw:: latex

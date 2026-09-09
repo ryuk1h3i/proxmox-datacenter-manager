@@ -26,8 +26,8 @@ fn main() -> Result<(), Error> {
     server::env::sanitize_environment_vars();
 
     proxmox_log::Logger::from_env("PROXMOX_DEBUG", LevelFilter::INFO)
-        .journald_on_no_workertask()
         .tasklog_pbs()
+        .stderr()
         .init()?;
 
     proxmox_product_config::init(pdm_config::api_user()?, pdm_config::priv_user()?);
@@ -185,11 +185,9 @@ async fn run() -> Result<(), Error> {
                 format_err!("unable to set ownership for api socket '{sockpath}' - {err}")
             })?;
 
-            log::info!("created socket, notifying readiness to systemd and starting API server");
+            log::info!("created socket and starting API server");
 
             Ok(async move {
-                proxmox_systemd::notify::SystemdNotify::Ready.notify()?;
-
                 let graceful = GracefulShutdown::new();
                 loop {
                     tokio::select! {

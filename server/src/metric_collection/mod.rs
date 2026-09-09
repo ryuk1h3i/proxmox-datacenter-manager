@@ -10,7 +10,6 @@ use tokio::sync::oneshot;
 use pdm_api_types::RemoteMetricCollectionStatus;
 use pdm_buildcfg::PDM_STATE_DIR_M;
 
-mod local_collection_task;
 mod remote_collection_task;
 pub mod rrd_cache;
 mod rrd_task;
@@ -19,8 +18,6 @@ pub mod top_entities;
 
 use remote_collection_task::{ControlMsg, RemoteMetricCollectionTask};
 use rrd_cache::RrdCache;
-
-use crate::metric_collection::local_collection_task::LocalMetricCollectionTask;
 
 const RRD_CACHE_BASEDIR: &str = concat!(PDM_STATE_DIR_M!(), "/rrdb");
 
@@ -62,14 +59,6 @@ pub fn start_task() -> Result<(), Error> {
                 Err(err) => log::error!("could not start metric collection task: {err}"),
             }
         });
-
-        let abort_future = pin!(proxmox_daemon::shutdown_future());
-        futures::future::select(metric_collection_task_future, abort_future).await;
-    });
-
-    tokio::spawn(async move {
-        let metric_collection_task_future =
-            pin!(async move { LocalMetricCollectionTask::new(metric_data_tx).run().await });
 
         let abort_future = pin!(proxmox_daemon::shutdown_future());
         futures::future::select(metric_collection_task_future, abort_future).await;

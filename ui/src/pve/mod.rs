@@ -30,6 +30,7 @@ use crate::remotes::RemoteCertCheck;
 use crate::{LoadResult, extract_package_version, get_deep_url, get_remote};
 
 pub mod lxc;
+mod jobs;
 pub mod node;
 pub mod qemu;
 pub mod remote;

@@ -4,20 +4,12 @@ use js_sys::{Array, JsString, Object};
 use pdm_api_types::remote_updates::RemoteUpdateSummary;
 use pdm_api_types::remotes::RemoteType;
 use pdm_api_types::resource::{PveLxcResource, PveQemuResource};
-use pdm_api_types::subscription::PdmSubscriptionInfo;
 use pdm_client::types::Resource;
 use proxmox_deb_version::Version;
 use pwt::props::ContainerBuilder;
 use pwt::tr;
-use pwt::widget::{AlertDialog, Container};
+use pwt::widget::Container;
 use serde::{Deserialize, Serialize};
-use serde_json::Value;
-
-use proxmox_yew_comp::http_get;
-
-mod administration;
-
-pub use administration::ServerAdministration;
 
 mod certificates;
 pub use certificates::CertificatesPanel;
@@ -43,7 +35,6 @@ mod guests;
 
 use wasm_bindgen::JsValue;
 use yew::Html;
-use yew::html::IntoEventCallback;
 use yew_router::prelude::RouterScopeExt;
 
 mod widget;
@@ -249,51 +240,6 @@ pub(crate) fn locale_compare(first: String, second: &str, numeric: bool) -> std:
     first
         .locale_compare(second, &Array::new(), &options)
         .cmp(&0)
-}
-
-/// Returns true if the global PDM subscription checks succeeded.
-///
-/// NOTE: This should be only used for PDM itself, or for when it's checked for a PDM specific
-/// feature, i.e., one that's not just relayed 1:1 to a specific remote node, as for that one should
-/// use the remote-specific check.
-pub async fn check_pdm_subscription() -> bool {
-    let data: Result<Value, _> = http_get("/nodes/localhost/subscription", None).await;
-    let mut is_active = proxmox_yew_comp::subscription_is_active(Some(&data));
-    if !is_active {
-        if let Ok(Ok(info)) = data.map(serde_json::from_value::<PdmSubscriptionInfo>) {
-            if info.statistics.total_nodes == 0 {
-                is_active = true;
-            }
-        }
-    }
-    is_active
-}
-
-/// Returns an [`AlertDialog`] with a PDM specific 'no valid subscription' popup.
-///
-///
-/// NOTE: This should be only used for PDM itself, or for when it's used for a PDM specific feature,
-/// i.e., one that's not just relayed 1:1 to a specific remote node, as for that one should use the
-/// remote-specific alert.
-pub fn pdm_subscription_alert(on_close: impl IntoEventCallback<()>) -> AlertDialog {
-    let (title, msg) = pdm_subscription_title_and_message();
-    AlertDialog::new(Container::from_tag("p").with_child(msg))
-        .title(title)
-        .on_close(on_close)
-}
-
-/// returns the PDM specific title and message for the subscription alert
-pub fn pdm_subscription_title_and_message() -> (String, Html) {
-    let dest =
-        "<a target=\"_blank\" href=\"https://pdm.proxmox.com/docs/faq.html\">pdm.proxmox.com</a>"
-            .to_string();
-
-    let msg = tr!(
-        "Too many remote nodes without active basic or higher subscription. Please visit {0} for more details.",
-        dest
-    );
-    let msg = Html::from_html_unchecked(msg.into());
-    (tr!("No valid subscriptions"), msg)
 }
 
 /// Extract the version of a specific package from `RemoteUpdateSummary` for a specific node

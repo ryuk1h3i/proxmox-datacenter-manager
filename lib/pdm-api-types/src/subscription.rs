@@ -158,37 +158,6 @@ pub struct RemoteSubscriptions {
     pub state: RemoteSubscriptionState,
 }
 
-#[api]
-#[derive(Default, Serialize, Deserialize, Clone, PartialEq)]
-#[serde(rename_all = "kebab-case")]
-/// Lists the subscription level per node for the remote
-pub struct SubscriptionStatistics {
-    /// Total number of nodes across all remotes
-    pub total_nodes: usize,
-    /// Total number of active subscriptions across all remotes
-    pub active_subscriptions: usize,
-    /// Total number of community level subscriptions across all remotes
-    pub community: usize,
-}
-
-#[api(
-    properties: {
-        info: {
-            type: SubscriptionInfo,
-        }
-    }
-)]
-#[derive(Default, Serialize, Deserialize, Clone, PartialEq)]
-#[serde(rename_all = "kebab-case")]
-/// The PDM subscription info
-pub struct PdmSubscriptionInfo {
-    #[serde(flatten)]
-    pub info: SubscriptionInfo,
-
-    /// PDM subscription statistics
-    pub statistics: SubscriptionStatistics,
-}
-
 const_regex! {
     /// Subscription key pattern, restricted to the products PDM can drive.
     ///

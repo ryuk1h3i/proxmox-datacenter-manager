@@ -2,6 +2,7 @@ use anyhow::{Context, Error, bail};
 use serde_json::Value;
 
 use proxmox_access_control::CachedUserInfo;
+use proxmox_client::HttpApiClient;
 use proxmox_router::{ApiHandler, ApiMethod, ApiResponseFuture};
 use proxmox_router::{
     Permission, Router, RpcEnvironment, SubdirMap, http_bail, list_subdirs_api_method,
@@ -12,8 +13,9 @@ use pve_api_types::PendingConfigValue;
 
 use pdm_api_types::remotes::REMOTE_ID_SCHEMA;
 use pdm_api_types::remotes::Remote;
+use pdm_api_types::guest::{CloneLxc, CreateLxc, UpdateLxc};
 use pdm_api_types::{
-    Authid, ConfigurationState, NODE_SCHEMA, PRIV_RESOURCE_AUDIT, PRIV_RESOURCE_MANAGE,
+    Authid, ConfigurationState, NODE_SCHEMA, PRIV_RESOURCE_AUDIT, PRIV_RESOURCE_CREATE, PRIV_RESOURCE_MANAGE,
     PRIV_RESOURCE_MIGRATE, PRIV_SYS_CONSOLE, RemoteUpid, SNAPSHOT_NAME_SCHEMA, VMID_SCHEMA,
 };
 
@@ -23,21 +25,29 @@ use crate::api::remotes::shell::TermTicketType;
 
 use super::{
     check_guest_delete_perms, check_guest_list_permissions, check_guest_permissions,
-    connect_to_remote, connect_to_remote_by_id, new_remote_upid,
+    connect_to_remote, connect_to_remote_by_id, new_remote_upid, raw_client_to_remote_by_id,
 };
 
 use super::find_node_for_vm;
 
 pub const ROUTER: Router = Router::new()
     .get(&API_METHOD_LIST_LXC)
+    .post(&API_METHOD_CREATE_LXC)
     .match_all("vmid", &LXC_VM_ROUTER);
 
 const LXC_VM_ROUTER: Router = Router::new()
     .get(&list_subdirs_api_method!(LXC_VM_SUBDIRS))
+    .delete(&API_METHOD_DELETE_LXC)
     .subdirs(LXC_VM_SUBDIRS);
 #[sortable]
 const LXC_VM_SUBDIRS: SubdirMap = &sorted!([
-    ("config", &Router::new().get(&API_METHOD_LXC_GET_CONFIG)),
+    (
+        "config",
+        &Router::new()
+            .get(&API_METHOD_LXC_GET_CONFIG)
+            .put(&API_METHOD_LXC_UPDATE_CONFIG)
+    ),
+    ("clone", &Router::new().post(&API_METHOD_LXC_CLONE)),
     ("pending", &Router::new().get(&API_METHOD_LXC_GET_PENDING)),
     ("firewall", &super::firewall::LXC_FW_ROUTER),
     ("rrddata", &super::rrddata::LXC_RRD_ROUTER),
@@ -45,6 +55,10 @@ const LXC_VM_SUBDIRS: SubdirMap = &sorted!([
     ("status", &Router::new().get(&API_METHOD_LXC_GET_STATUS)),
     ("stop", &Router::new().post(&API_METHOD_LXC_STOP)),
     ("shutdown", &Router::new().post(&API_METHOD_LXC_SHUTDOWN)),
+    ("reboot", &Router::new().post(&API_METHOD_LXC_REBOOT)),
+    ("resume", &Router::new().post(&API_METHOD_LXC_RESUME)),
+    ("suspend", &Router::new().post(&API_METHOD_LXC_SUSPEND)),
+    ("template", &Router::new().post(&API_METHOD_LXC_TEMPLATE)),
     (
         "snapshot",
         &Router::new()
@@ -81,6 +95,96 @@ const LXC_SNAPSHOT_SUBDIRS: SubdirMap = &sorted!([
         &Router::new().post(&API_METHOD_LXC_ROLLBACK_SNAPSHOT)
     )
 ]);
+
+#[api(
+    input: {
+        properties: {
+            remote: { schema: REMOTE_ID_SCHEMA },
+            node: { schema: NODE_SCHEMA },
+            config: { type: CreateLxc, flatten: true },
+        },
+    },
+    returns: { type: RemoteUpid },
+    access: {
+        permission: &Permission::Privilege(&["resource", "{remote}"], PRIV_RESOURCE_CREATE, false),
+    },
+)]
+/// Create an LXC container on a remote PVE node.
+pub async fn create_lxc(
+    remote: String,
+    node: String,
+    config: CreateLxc,
+) -> Result<RemoteUpid, Error> {
+    let client = raw_client_to_remote_by_id(&remote)?;
+    let path = format!("/api2/extjs/nodes/{node}/lxc");
+    let upid = client
+        .post(&path, &config)
+        .await?
+        .expect_json::<pve_api_types::PveUpid>()?
+        .data;
+    new_remote_upid(remote, upid).await
+}
+
+#[api(
+    input: {
+        properties: {
+            remote: { schema: REMOTE_ID_SCHEMA },
+            node: { schema: NODE_SCHEMA, optional: true },
+            vmid: { schema: VMID_SCHEMA },
+            config: { type: UpdateLxc, flatten: true },
+        },
+    },
+    access: {
+        permission: &Permission::Privilege(&["resource", "{remote}", "guest", "{vmid}"], PRIV_RESOURCE_MANAGE, false),
+    },
+)]
+/// Update common LXC container configuration properties.
+pub async fn lxc_update_config(
+    remote: String,
+    node: Option<String>,
+    vmid: u32,
+    config: UpdateLxc,
+) -> Result<(), Error> {
+    let pve = connect_to_remote_by_id(&remote)?;
+    let node = find_node_for_vm(node, vmid, pve.as_ref()).await?;
+    let client = raw_client_to_remote_by_id(&remote)?;
+    let path = format!("/api2/extjs/nodes/{node}/lxc/{vmid}/config");
+    client.put(&path, &config).await?.nodata()?;
+    Ok(())
+}
+
+#[api(
+    input: {
+        properties: {
+            remote: { schema: REMOTE_ID_SCHEMA },
+            node: { schema: NODE_SCHEMA, optional: true },
+            vmid: { schema: VMID_SCHEMA },
+            config: { type: CloneLxc, flatten: true },
+        },
+    },
+    returns: { type: RemoteUpid },
+    access: {
+        permission: &Permission::Privilege(&["resource", "{remote}"], PRIV_RESOURCE_CREATE, false),
+    },
+)]
+/// Clone an LXC container or template.
+pub async fn lxc_clone(
+    remote: String,
+    node: Option<String>,
+    vmid: u32,
+    config: CloneLxc,
+) -> Result<RemoteUpid, Error> {
+    let pve = connect_to_remote_by_id(&remote)?;
+    let node = find_node_for_vm(node, vmid, pve.as_ref()).await?;
+    let client = raw_client_to_remote_by_id(&remote)?;
+    let path = format!("/api2/extjs/nodes/{node}/lxc/{vmid}/clone");
+    let upid = client
+        .post(&path, &config)
+        .await?
+        .expect_json::<pve_api_types::PveUpid>()?
+        .data;
+    new_remote_upid(remote, upid).await
+}
 
 #[api(
     input: {
@@ -269,6 +373,116 @@ pub async fn lxc_start(
 
     let upid = pve.start_lxc_async(&node, vmid, Default::default()).await?;
 
+    new_remote_upid(remote, upid).await
+}
+
+async fn lxc_raw_action(
+    remote: String,
+    node: Option<String>,
+    vmid: u32,
+    action: &str,
+) -> Result<RemoteUpid, Error> {
+    let pve = connect_to_remote_by_id(&remote)?;
+    let node = find_node_for_vm(node, vmid, pve.as_ref()).await?;
+    let client = raw_client_to_remote_by_id(&remote)?;
+    let path = format!("/api2/extjs/nodes/{node}/lxc/{vmid}/status/{action}");
+    let upid = client
+        .post(&path, &serde_json::json!({}))
+        .await?
+        .expect_json::<pve_api_types::PveUpid>()?
+        .data;
+    new_remote_upid(remote, upid).await
+}
+
+macro_rules! lxc_action {
+    ($name:ident, $action:literal, $doc:literal) => {
+        #[api(
+            input: {
+                properties: {
+                    remote: { schema: REMOTE_ID_SCHEMA },
+                    node: { schema: NODE_SCHEMA, optional: true },
+                    vmid: { schema: VMID_SCHEMA },
+                },
+            },
+            returns: { type: RemoteUpid },
+            access: {
+                permission: &Permission::Privilege(&["resource", "{remote}", "guest", "{vmid}"], PRIV_RESOURCE_MANAGE, false),
+            },
+        )]
+        #[doc = $doc]
+        pub async fn $name(
+            remote: String,
+            node: Option<String>,
+            vmid: u32,
+        ) -> Result<RemoteUpid, Error> {
+            lxc_raw_action(remote, node, vmid, $action).await
+        }
+    };
+}
+
+lxc_action!(lxc_reboot, "reboot", "Reboot an LXC container.");
+lxc_action!(lxc_resume, "resume", "Resume an LXC container.");
+lxc_action!(lxc_suspend, "suspend", "Suspend an LXC container.");
+
+#[api(
+    input: {
+        properties: {
+            remote: { schema: REMOTE_ID_SCHEMA },
+            node: { schema: NODE_SCHEMA, optional: true },
+            vmid: { schema: VMID_SCHEMA },
+        },
+    },
+    returns: { type: RemoteUpid },
+    access: {
+        permission: &Permission::Privilege(&["resource", "{remote}", "guest", "{vmid}"], PRIV_RESOURCE_MANAGE, false),
+    },
+)]
+/// Convert a stopped LXC container into a template.
+pub async fn lxc_template(
+    remote: String,
+    node: Option<String>,
+    vmid: u32,
+) -> Result<RemoteUpid, Error> {
+    let pve = connect_to_remote_by_id(&remote)?;
+    let node = find_node_for_vm(node, vmid, pve.as_ref()).await?;
+    let client = raw_client_to_remote_by_id(&remote)?;
+    let path = format!("/api2/extjs/nodes/{node}/lxc/{vmid}/template");
+    let upid = client
+        .post(&path, &serde_json::json!({}))
+        .await?
+        .expect_json::<pve_api_types::PveUpid>()?
+        .data;
+    new_remote_upid(remote, upid).await
+}
+
+#[api(
+    input: {
+        properties: {
+            remote: { schema: REMOTE_ID_SCHEMA },
+            node: { schema: NODE_SCHEMA, optional: true },
+            vmid: { schema: VMID_SCHEMA },
+        },
+    },
+    returns: { type: RemoteUpid },
+    access: { permission: &Permission::Anybody },
+)]
+/// Permanently destroy an LXC container.
+pub async fn delete_lxc(
+    remote: String,
+    node: Option<String>,
+    vmid: u32,
+    rpcenv: &mut dyn RpcEnvironment,
+) -> Result<RemoteUpid, Error> {
+    check_guest_delete_perms(rpcenv, &remote, vmid)?;
+    let pve = connect_to_remote_by_id(&remote)?;
+    let node = find_node_for_vm(node, vmid, pve.as_ref()).await?;
+    let client = raw_client_to_remote_by_id(&remote)?;
+    let path = format!("/api2/extjs/nodes/{node}/lxc/{vmid}");
+    let upid = client
+        .delete(&path)
+        .await?
+        .expect_json::<pve_api_types::PveUpid>()?
+        .data;
     new_remote_upid(remote, upid).await
 }
 

@@ -24,15 +24,12 @@ use proxmox_yew_comp::{
 use pdm_api_types::views::ViewConfig;
 use pdm_ui::{
     MainMenu, RemoteList, RemoteListCacheEntry, SearchProvider, TopNavBar, ViewListContext,
-    check_pdm_subscription, pdm_subscription_alert,
 };
 
 type MsgRemoteList = Result<RemoteList, Error>;
 type MsgViewList = Result<Vec<String>, Error>;
 
 enum Msg {
-    ConfirmSubscription,
-    ShowSubscriptionAlert,
     Login(Authentication),
     // SaveFingerprint(String), FIXME
     Logout,
@@ -45,8 +42,6 @@ enum Msg {
 struct DatacenterManagerApp {
     _auth_observer: AuthObserver,
     login_info: Option<Authentication>,
-    subscription_confirmed: bool,
-    show_subscription_alert: Option<bool>,
     running_tasks: Loader<Vec<TaskListItem>>,
     running_tasks_timeout: Option<Timeout>,
     remote_list: RemoteList,
@@ -74,22 +69,7 @@ impl DatacenterManagerApp {
     fn on_login(&mut self, ctx: &Context<Self>, fresh_login: bool) {
         if let Some(info) = &self.login_info {
             self.running_tasks.load();
-            if fresh_login {
-                if self.subscription_confirmed {
-                    ctx.link().send_message(Msg::ConfirmSubscription);
-                } else {
-                    self.async_pool.send_future(ctx.link().clone(), async move {
-                        let is_active = check_pdm_subscription().await;
-
-                        if !is_active {
-                            Msg::ShowSubscriptionAlert
-                        } else {
-                            Msg::ConfirmSubscription
-                        }
-                    });
-                }
-            } else {
-                ctx.link().send_message(Msg::ConfirmSubscription);
+            if !fresh_login {
                 proxmox_yew_comp::http_set_auth(info.clone());
             }
             //ctx.link().send_future_batch(get_fingerprint());
@@ -208,8 +188,6 @@ impl Component for DatacenterManagerApp {
         let mut this = Self {
             _auth_observer,
             login_info,
-            subscription_confirmed: false,
-            show_subscription_alert: None,
             running_tasks,
             running_tasks_timeout: None,
             remote_list: Vec::new().into(),
@@ -229,16 +207,6 @@ impl Component for DatacenterManagerApp {
 
     fn update(&mut self, ctx: &Context<Self>, msg: Self::Message) -> bool {
         match msg {
-            Msg::ConfirmSubscription => {
-                self.subscription_confirmed = true;
-                self.show_subscription_alert = Some(false);
-                true
-            }
-            Msg::ShowSubscriptionAlert => {
-                self.subscription_confirmed = false;
-                self.show_subscription_alert = Some(true);
-                true
-            }
             Msg::Logout => {
                 //log::info!("CLEAR COOKIE");
                 // this will drop the pool and abort all current requests
@@ -248,7 +216,6 @@ impl Component for DatacenterManagerApp {
                 proxmox_yew_comp::http_clear_auth();
                 self.login_info = None;
                 self.running_tasks_timeout = None;
-                self.show_subscription_alert = None;
                 true
             }
             Msg::Login(info) => {
@@ -294,13 +261,6 @@ impl Component for DatacenterManagerApp {
 
     fn view(&self, ctx: &Context<Self>) -> Html {
         let on_login = ctx.link().callback(Msg::Login);
-        let loading = self.login_info.is_some() && self.show_subscription_alert.is_none();
-        let subscription_alert = self.show_subscription_alert.and_then(|show| {
-            (self.login_info.is_some() && show).then_some(pdm_subscription_alert(
-                ctx.link().callback(|_| Msg::ConfirmSubscription),
-            ))
-        });
-
         let username = self.login_info.as_ref().map(|info| info.userid.to_owned());
         let mut body: Html = Column::new()
             .class("pwt-viewport")
@@ -310,10 +270,9 @@ impl Component for DatacenterManagerApp {
                     .on_logout(ctx.link().callback(|_| Msg::Logout)),
             )
             .with_child({
-                let main_view: Html = if self.login_info.is_some() && !loading {
+                let main_view: Html = if self.login_info.is_some() {
                     MainMenu::new()
                         .view_list(self.view_list.clone())
-                        .username(username.clone())
                         .remote_list(self.remote_list_cache.clone())
                         .remote_list_loading(self.remote_list_error.is_some())
                         .into()
@@ -326,10 +285,9 @@ impl Component for DatacenterManagerApp {
                 };
                 main_view
             })
-            .with_optional_child(subscription_alert)
             .into();
 
-        if self.login_info.is_some() && !loading {
+        if self.login_info.is_some() {
             body = html! { <AclContextProvider>{body}</AclContextProvider> };
         }
 

@@ -6,7 +6,6 @@ use proxmox_schema::api;
 
 use pdm_api_types::{ConfigDigest, NODE_SCHEMA, PRIV_SYS_AUDIT, PRIV_SYS_MODIFY};
 
-use crate::api::nodes::apt::update_apt_proxy_config;
 use pdm_api_types::{NodeConfig, NodeConfigUpdater};
 
 pub const ROUTER: Router = Router::new()
@@ -129,8 +128,6 @@ pub fn update_node_config(
     }
 
     pdm_config::node::save_config(&config)?;
-
-    update_apt_proxy_config(pdm_config::node::get_http_proxy_config(&config).as_ref())?;
 
     Ok(())
 }

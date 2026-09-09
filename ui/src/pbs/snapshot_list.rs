@@ -6,6 +6,7 @@ use anyhow::{Error, bail, format_err};
 use gloo_timers::callback::Interval;
 use js_sys::Date;
 use proxmox_yew_comp::utils::render_epoch_short;
+use proxmox_yew_comp::{EditWindow, LoadableComponentScopeExt};
 use pwt::css::FontColor;
 use yew::virtual_dom::{Key, VComp, VNode};
 use yew::{Properties, html};
@@ -18,10 +19,12 @@ use pwt::props::{
 };
 use pwt::state::{Selection, TreeStore};
 use pwt::widget::data_table::{DataTable, DataTableColumn, DataTableHeader};
-use pwt::widget::{Column, Container, Fa, Progress, Toolbar, Tooltip, error_message};
+use pwt::widget::form::{Field, FormContext};
+use pwt::widget::{Button, Column, ConfirmDialog, Container, Fa, InputPanel, Progress, Toolbar, Tooltip, error_message};
 use pwt::{AsyncPool, css};
 
 use pbs_api_types::{BackupGroup, BackupNamespace, BackupType, SnapshotListItem, VerifyState};
+use pdm_api_types::pbs_jobs::{PbsSnapshotNotes, PbsSnapshotProtection, PbsSnapshotRef};
 
 use proxmox_yew_comp::http_stream::Stream;
 
@@ -81,6 +84,18 @@ enum Msg {
     UpdateParentNamespace(Key),
     Reload,
     LoadFinished(Result<(), Error>),
+    VerifySelected,
+    ToggleProtection,
+    EditNotes,
+    ForgetSelected,
+    ActionFinished(Result<Option<pdm_api_types::RemoteUpid>, Error>),
+    CloseDialog,
+}
+
+#[derive(Clone)]
+enum DialogState {
+    Notes(PbsSnapshotRef),
+    Forget(PbsSnapshotRef),
 }
 
 struct SnapshotListComp {
@@ -92,6 +107,7 @@ struct SnapshotListComp {
     buffer: Vec<SnapshotListItem>,
     current_namespace: BackupNamespace,
     interval: Option<Interval>,
+    dialog: Option<DialogState>,
 }
 
 impl SnapshotListComp {
@@ -196,6 +212,7 @@ impl Component for SnapshotListComp {
             buffer: Vec::new(),
             current_namespace: BackupNamespace::root(),
             interval: None,
+            dialog: None,
         };
         this.reload(ctx);
         this
@@ -282,6 +299,48 @@ impl Component for SnapshotListComp {
                 self.interval = None;
                 true
             }
+            Msg::VerifySelected => {
+                let Some(snapshot) = self.selected_snapshot_ref() else { return false; };
+                let remote = ctx.props().remote.clone();
+                let datastore = ctx.props().datastore.clone();
+                self._async_pool.send_future(ctx.link().clone(), async move {
+                    Msg::ActionFinished(crate::pdm_client().pbs_verify_snapshot(&remote, &datastore, &snapshot).await.map(Some))
+                });
+                false
+            }
+            Msg::ToggleProtection => {
+                let Some((snapshot, protected)) = self.selected_snapshot() else { return false; };
+                let remote = ctx.props().remote.clone();
+                let datastore = ctx.props().datastore.clone();
+                self._async_pool.send_future(ctx.link().clone(), async move {
+                    let request = PbsSnapshotProtection { snapshot, protected: !protected };
+                    Msg::ActionFinished(crate::pdm_client().pbs_set_snapshot_protection(&remote, &datastore, &request).await.map(|_| None))
+                });
+                false
+            }
+            Msg::EditNotes => {
+                self.dialog = self.selected_snapshot_ref().map(DialogState::Notes);
+                true
+            }
+            Msg::ForgetSelected => {
+                self.dialog = self.selected_snapshot_ref().map(DialogState::Forget);
+                true
+            }
+            Msg::ActionFinished(result) => {
+                match result {
+                    Ok(Some(upid)) => {
+                        ctx.link().show_task_progress(upid.to_string());
+                    }
+                    Ok(None) => self.clear_and_reload(ctx),
+                    Err(err) => ctx.link().show_error(tr!("Error"), err.to_string(), true),
+                }
+                true
+            }
+            Msg::CloseDialog => {
+                self.dialog = None;
+                self.clear_and_reload(ctx);
+                true
+            }
         }
     }
 
@@ -302,8 +361,11 @@ impl Component for SnapshotListComp {
         let remote = props.remote.clone();
         let datastore = props.datastore.clone();
         let loading = self.interval.is_some();
+        let selected = self.selected_snapshot();
+        let has_snapshot = selected.is_some();
+        let protected = selected.as_ref().map(|(_, protected)| *protected).unwrap_or(false);
 
-        Column::new()
+        let mut view = Column::new()
             .class(css::FlexFit)
             .with_optional_child(
                 self.load_result.is_none().then_some(
@@ -318,6 +380,10 @@ impl Component for SnapshotListComp {
             .with_child(
                 Toolbar::new()
                     .border_bottom(true)
+                    .with_child(Button::new(tr!("Verify")).icon_class("fa fa-check-circle").disabled(!has_snapshot).on_activate(link.callback(|_| Msg::VerifySelected)))
+                    .with_child(Button::new(if protected { tr!("Unprotect") } else { tr!("Protect") }).icon_class("fa fa-shield").disabled(!has_snapshot).on_activate(link.callback(|_| Msg::ToggleProtection)))
+                    .with_child(Button::new(tr!("Notes")).icon_class("fa fa-sticky-note-o").disabled(!has_snapshot).on_activate(link.callback(|_| Msg::EditNotes)))
+                    .with_child(Button::new(tr!("Forget")).icon_class("fa fa-trash").disabled(!has_snapshot).on_activate(link.callback(|_| Msg::ForgetSelected)))
                     .with_flex_spacer()
                     .with_child(pwt::widget::FieldLabel::new(tr!("Namespace")))
                     .with_child(
@@ -334,8 +400,63 @@ impl Component for SnapshotListComp {
                     .class(css::FlexFit)
                     .selection(self.selection.clone()),
             )
-            .with_optional_child(err.map(|err| error_message(&err.to_string())))
-            .into()
+            .with_optional_child(err.map(|err| error_message(&err.to_string())));
+
+        if let Some(dialog) = &self.dialog {
+            match dialog {
+                DialogState::Notes(snapshot) => {
+                    let snapshot = snapshot.clone();
+                    let remote = props.remote.clone();
+                    let datastore = props.datastore.clone();
+                    view.add_child(EditWindow::new(tr!("Snapshot notes"))
+                        .renderer(|_| InputPanel::new().padding(4).min_width(600).with_large_field(tr!("Notes"), Field::new().name("notes")).into())
+                        .on_submit(move |form: FormContext| {
+                            let request = PbsSnapshotNotes { snapshot: snapshot.clone(), notes: form.read().get_field_text("notes") };
+                            let remote = remote.clone();
+                            let datastore = datastore.clone();
+                            async move { crate::pdm_client().pbs_set_snapshot_notes(&remote, &datastore, &request).await }
+                        })
+                        .on_done(link.callback(|_| Msg::CloseDialog)));
+                }
+                DialogState::Forget(snapshot) => {
+                    let snapshot = snapshot.clone();
+                    let remote = props.remote.clone();
+                    let datastore = props.datastore.clone();
+                    view.add_child(ConfirmDialog::new(tr!("Confirm"), tr!("Permanently forget the selected snapshot?"))
+                        .on_confirm(move |_| {
+                            let snapshot = snapshot.clone();
+                            let remote = remote.clone();
+                            let datastore = datastore.clone();
+                            let link = link.clone();
+                            wasm_bindgen_futures::spawn_local(async move {
+                                let result = crate::pdm_client().pbs_forget_snapshot(&remote, &datastore, &snapshot).await.map(|_| None);
+                                link.send_message(Msg::ActionFinished(result));
+                            });
+                        })
+                        .on_close(link.callback(|_| Msg::CloseDialog)));
+                }
+            }
+        }
+        view.into()
+    }
+}
+
+impl SnapshotListComp {
+    fn selected_snapshot(&self) -> Option<(PbsSnapshotRef, bool)> {
+        let key = self.selection.selected_key()?;
+        let store = self.store.read();
+        let SnapshotTreeEntry::Snapshot(entry) = store.lookup_record(&key)? else { return None; };
+        let ns = (!self.current_namespace.is_root()).then(|| self.current_namespace.to_string());
+        Some((PbsSnapshotRef {
+            backup_type: entry.backup.group.ty.to_string(),
+            backup_id: entry.backup.group.id.to_string(),
+            backup_time: entry.backup.time,
+            ns,
+        }, entry.protected))
+    }
+
+    fn selected_snapshot_ref(&self) -> Option<PbsSnapshotRef> {
+        self.selected_snapshot().map(|(snapshot, _)| snapshot)
     }
 }
 

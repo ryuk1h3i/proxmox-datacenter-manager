@@ -13,6 +13,7 @@ use crate::pbs::SnapshotList;
 
 mod overview;
 use overview::DataStoreOverview;
+use crate::pbs::maintenance::DatastoreMaintenance;
 
 #[derive(Properties, PartialEq)]
 pub struct DatastorePanel {
@@ -85,6 +86,18 @@ impl Component for DatastorePanelComp {
                     let remote = props.remote.clone();
                     let name = props.config.name.clone();
                     move |_| SnapshotList::new(remote.clone(), name.clone()).into()
+                },
+            )
+            .with_item_builder(
+                TabBarItem::new()
+                    .key("maintenance")
+                    .label(tr!("Prune & GC"))
+                    .disabled(offline)
+                    .icon_class("fa fa-recycle"),
+                {
+                    let remote = props.remote.clone();
+                    let name = props.config.name.clone();
+                    move |_| DatastoreMaintenance::new(remote.clone(), name.clone()).into()
                 },
             )
             .into()
