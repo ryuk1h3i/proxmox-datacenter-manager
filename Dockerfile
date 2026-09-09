@@ -19,6 +19,13 @@ RUN apt-get update \
         'Components: pdm-no-subscription' \
         'Signed-By: /usr/share/keyrings/proxmox-archive-keyring.gpg' \
         > /etc/apt/sources.list.d/proxmox.sources \
+    && printf '%s\n' \
+        'Types: deb' \
+        'URIs: http://download.proxmox.com/debian/devel' \
+        'Suites: trixie' \
+        'Components: main' \
+        'Signed-By: /usr/share/keyrings/proxmox-archive-keyring.gpg' \
+        > /etc/apt/sources.list.d/proxmox-devel.sources \
     && apt-get update
 
 WORKDIR /source
