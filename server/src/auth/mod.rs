@@ -73,7 +73,7 @@ fn setup_admin_password() -> Result<(), Error> {
         config_filename: PASSWORD_STORE,
         lock_filename: pdm_buildcfg::configdir!("/access/shadow.json.lock"),
     };
-    authenticator.store_password("admin", password, None)?;
+    authenticator.store_password(UsernameRef::new("admin")?, password, None)?;
     Ok(())
 }
 

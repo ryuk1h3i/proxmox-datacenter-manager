@@ -46,7 +46,11 @@ fn encode_id(id: &str) -> String {
 
 #[api(
     input: { properties: { remote: { schema: REMOTE_ID_SCHEMA } } },
-    returns: { type: Array, items: { type: PveReplicationJob } },
+    returns: {
+        description: "Configured replication jobs.",
+        type: Array,
+        items: { type: PveReplicationJob },
+    },
     access: {
         permission: &Permission::Privilege(&["resource", "{remote}"], PRIV_RESOURCE_AUDIT, false),
     },
@@ -65,7 +69,7 @@ pub async fn list_replication_jobs(remote: String) -> Result<Vec<PveReplicationJ
     input: {
         properties: {
             remote: { schema: REMOTE_ID_SCHEMA },
-            id: { type: String },
+            id: { description: "Replication job identifier.", type: String },
         },
     },
     returns: { type: PveReplicationJob },
@@ -108,7 +112,7 @@ pub async fn create_replication_job(
     input: {
         properties: {
             remote: { schema: REMOTE_ID_SCHEMA },
-            id: { type: String },
+            id: { description: "Replication job identifier.", type: String },
             config: { type: PveReplicationJobConfig, flatten: true },
         },
     },
@@ -132,7 +136,7 @@ pub async fn update_replication_job(
     input: {
         properties: {
             remote: { schema: REMOTE_ID_SCHEMA },
-            id: { type: String },
+            id: { description: "Replication job identifier.", type: String },
         },
     },
     access: {
@@ -151,7 +155,7 @@ pub async fn delete_replication_job(remote: String, id: String) -> Result<(), Er
     input: {
         properties: {
             remote: { schema: REMOTE_ID_SCHEMA },
-            id: { type: String },
+            id: { description: "Replication job identifier.", type: String },
             node: { schema: NODE_SCHEMA },
         },
     },
@@ -178,7 +182,7 @@ pub async fn get_replication_status(
     input: {
         properties: {
             remote: { schema: REMOTE_ID_SCHEMA },
-            id: { type: String },
+            id: { description: "Replication job identifier.", type: String },
             node: { schema: NODE_SCHEMA },
         },
     },

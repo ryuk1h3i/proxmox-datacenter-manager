@@ -2,8 +2,8 @@ use anyhow::{Error, bail};
 use serde::{Deserialize, Serialize};
 
 use proxmox_config_digest::ConfigDigest;
-use proxmox_router::{Permission, Router, RpcEnvironment, http_bail, http_err, param_bail};
-use proxmox_schema::api;
+use proxmox_router::{Permission, Router, RpcEnvironment, http_bail, http_err};
+use proxmox_schema::{ParameterError, api, param_bail};
 
 use pdm_api_types::media::{
     MediaCatalogConfigEntry, MediaCatalogEntry, MediaCatalogEntryUpdater,
@@ -33,6 +33,7 @@ fn validate_checksum(checksum: Option<&str>, algorithm: Option<&str>) -> Result<
 
 #[api(
     returns: {
+        description: "Configured installation media.",
         type: Array,
         items: { type: MediaCatalogEntry },
     },
@@ -70,7 +71,7 @@ pub fn add_media(entry: MediaCatalogEntry, digest: Option<ConfigDigest>) -> Resu
         entry.checksum.as_deref(),
         entry.checksum_algorithm.as_deref(),
     )
-    .map_err(|err| proxmox_router::ParameterError::from(("checksum", err)))?;
+    .map_err(|err| ParameterError::from(("checksum", err)))?;
 
     let _lock = pdm_config::media::lock_config()?;
     let (mut config, config_digest) = pdm_config::media::config()?;
@@ -92,10 +93,15 @@ pub fn add_media(entry: MediaCatalogEntry, digest: Option<ConfigDigest>) -> Resu
 #[serde(rename_all = "kebab-case")]
 /// Optional media properties which can be cleared during an update.
 pub enum DeletableMediaProperty {
+    /// Clear the media version.
     Version,
+    /// Clear the media architecture.
     Architecture,
+    /// Clear the checksum.
     Checksum,
+    /// Clear the checksum algorithm.
     ChecksumAlgorithm,
+    /// Clear the media size.
     Size,
 }
 
@@ -105,6 +111,7 @@ pub enum DeletableMediaProperty {
             id: { schema: PROXMOX_SAFE_ID_SCHEMA },
             entry: { type: MediaCatalogEntryUpdater, flatten: true },
             delete: {
+                description: "Optional media properties to clear.",
                 type: Array,
                 optional: true,
                 items: { type: DeletableMediaProperty },
@@ -175,7 +182,7 @@ pub fn update_media(
         current.checksum.as_deref(),
         current.checksum_algorithm.as_deref(),
     )
-    .map_err(|err| proxmox_router::ParameterError::from(("checksum", err)))?;
+    .map_err(|err| ParameterError::from(("checksum", err)))?;
 
     pdm_config::media::save_config(&config)
 }

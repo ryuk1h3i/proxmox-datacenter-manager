@@ -31,7 +31,11 @@ fn encode_id(id: &str) -> String {
 
 #[api(
     input: { properties: { remote: { schema: REMOTE_ID_SCHEMA } } },
-    returns: { type: Array, items: { type: PveBackupJob } },
+    returns: {
+        description: "Configured backup jobs.",
+        type: Array,
+        items: { type: PveBackupJob },
+    },
     access: {
         permission: &Permission::Privilege(&["resource", "{remote}"], PRIV_RESOURCE_AUDIT, false),
     },
@@ -74,7 +78,7 @@ pub async fn create_backup_job(
     input: {
         properties: {
             remote: { schema: REMOTE_ID_SCHEMA },
-            id: { type: String },
+            id: { description: "Backup job identifier.", type: String },
         },
     },
     returns: { type: PveBackupJob },
@@ -93,7 +97,7 @@ pub async fn get_backup_job(remote: String, id: String) -> Result<PveBackupJob, 
     input: {
         properties: {
             remote: { schema: REMOTE_ID_SCHEMA },
-            id: { type: String },
+            id: { description: "Backup job identifier.", type: String },
             config: { type: PveBackupJobConfig, flatten: true },
         },
     },
@@ -118,7 +122,7 @@ pub async fn update_backup_job(
     input: {
         properties: {
             remote: { schema: REMOTE_ID_SCHEMA },
-            id: { type: String },
+            id: { description: "Backup job identifier.", type: String },
         },
     },
     access: {

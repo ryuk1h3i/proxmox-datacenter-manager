@@ -41,6 +41,7 @@ const STORAGE_SUBDIR: SubdirMap = &sorted!([
         },
     },
     returns: {
+        description: "Content available on the selected storage.",
         type: Array,
         items: { type: PveStorageContent },
     },

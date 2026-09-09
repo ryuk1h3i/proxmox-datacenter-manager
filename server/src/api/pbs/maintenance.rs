@@ -58,12 +58,13 @@ const SYNC_JOB_SUBDIRS: SubdirMap = &sorted!([
 ]);
 
 macro_rules! job_get {
-    ($name:ident, $ty:ty, $method:ident) => {
+    ($name:ident, $ty:ident, $method:ident) => {
         #[api(
-            input: { properties: { remote: { schema: REMOTE_ID_SCHEMA }, id: { type: String } } },
-            returns: { type: $ty },
+            input: { properties: { remote: { schema: REMOTE_ID_SCHEMA }, id: { description: "Job identifier.", type: String } } },
+            returns: { description: "The requested job configuration.", type: $ty },
             access: { permission: &Permission::Privilege(&["resource", "{remote}"], PRIV_RESOURCE_AUDIT, false) },
         )]
+        /// Get a job configuration.
         pub async fn $name(remote: String, id: String) -> Result<$ty, Error> {
             Ok(pbs_client::connect_to_remote_by_id(&remote)?.$method(&id).await?)
         }
@@ -105,13 +106,14 @@ const DATASTORE_MAINTENANCE_SUBDIRS: SubdirMap = &sorted!([
 ]);
 
 macro_rules! job_crud {
-    ($list:ident, $create:ident, $update:ident, $delete:ident, $run:ident, $ty:ty,
+    ($list:ident, $create:ident, $update:ident, $delete:ident, $run:ident, $ty:ident,
      $list_method:ident, $create_method:ident, $update_method:ident, $delete_method:ident, $run_method:ident) => {
         #[api(
             input: { properties: { remote: { schema: REMOTE_ID_SCHEMA } } },
-            returns: { type: Array, items: { type: $ty } },
+            returns: { description: "Configured jobs.", type: Array, items: { type: $ty } },
             access: { permission: &Permission::Privilege(&["resource", "{remote}"], PRIV_RESOURCE_AUDIT, false) },
         )]
+        /// List configured jobs.
         pub async fn $list(remote: String) -> Result<Vec<$ty>, Error> {
             pbs_client::connect_to_remote_by_id(&remote)?.$list_method().await.map_err(Into::into)
         }
@@ -120,31 +122,35 @@ macro_rules! job_crud {
             input: { properties: { remote: { schema: REMOTE_ID_SCHEMA }, job: { type: $ty, flatten: true } } },
             access: { permission: &Permission::Privilege(&["resource", "{remote}"], PRIV_RESOURCE_MANAGE, false) },
         )]
+        /// Create a job configuration.
         pub async fn $create(remote: String, job: $ty) -> Result<(), Error> {
             pbs_client::connect_to_remote_by_id(&remote)?.$create_method(&job).await.map_err(Into::into)
         }
 
         #[api(
-            input: { properties: { remote: { schema: REMOTE_ID_SCHEMA }, id: { type: String }, job: { type: $ty, flatten: true } } },
+            input: { properties: { remote: { schema: REMOTE_ID_SCHEMA }, id: { description: "Job identifier.", type: String }, job: { type: $ty, flatten: true } } },
             access: { permission: &Permission::Privilege(&["resource", "{remote}"], PRIV_RESOURCE_MANAGE, false) },
         )]
+        /// Update a job configuration.
         pub async fn $update(remote: String, id: String, job: $ty) -> Result<(), Error> {
             pbs_client::connect_to_remote_by_id(&remote)?.$update_method(&id, &job).await.map_err(Into::into)
         }
 
         #[api(
-            input: { properties: { remote: { schema: REMOTE_ID_SCHEMA }, id: { type: String } } },
+            input: { properties: { remote: { schema: REMOTE_ID_SCHEMA }, id: { description: "Job identifier.", type: String } } },
             access: { permission: &Permission::Privilege(&["resource", "{remote}"], PRIV_RESOURCE_MANAGE, false) },
         )]
+        /// Delete a job configuration.
         pub async fn $delete(remote: String, id: String) -> Result<(), Error> {
             pbs_client::connect_to_remote_by_id(&remote)?.$delete_method(&id).await.map_err(Into::into)
         }
 
         #[api(
-            input: { properties: { remote: { schema: REMOTE_ID_SCHEMA }, id: { type: String } } },
-            returns: { type: RemoteUpid },
+            input: { properties: { remote: { schema: REMOTE_ID_SCHEMA }, id: { description: "Job identifier.", type: String } } },
+            returns: { description: "Remote task identifier.", type: RemoteUpid },
             access: { permission: &Permission::Privilege(&["resource", "{remote}"], PRIV_RESOURCE_MANAGE, false) },
         )]
+        /// Run a job immediately.
         pub async fn $run(remote: String, id: String) -> Result<RemoteUpid, Error> {
             let upid = pbs_client::connect_to_remote_by_id(&remote)?.$run_method(&id).await?;
             new_remote_upid(remote, upid).await
@@ -179,6 +185,7 @@ job_crud!(
         permission: &Permission::Privilege(&["resource", "{remote}", "datastore", "{datastore}"], PRIV_RESOURCE_AUDIT, false),
     },
 )]
+/// Get the garbage collection status of a datastore.
 pub async fn get_gc_status(remote: String, datastore: String) -> Result<PbsGcStatus, Error> {
     Ok(pbs_client::connect_to_remote_by_id(&remote)?
         .datastore_gc_status(&datastore)
@@ -192,11 +199,12 @@ pub async fn get_gc_status(remote: String, datastore: String) -> Result<PbsGcSta
             datastore: { schema: pbs_api_types::DATASTORE_SCHEMA },
         },
     },
-    returns: { type: RemoteUpid },
+    returns: { description: "Remote task identifier.", type: RemoteUpid },
     access: {
         permission: &Permission::Privilege(&["resource", "{remote}", "datastore", "{datastore}"], PRIV_RESOURCE_MANAGE, false),
     },
 )]
+/// Start garbage collection for a datastore.
 pub async fn run_gc(remote: String, datastore: String) -> Result<RemoteUpid, Error> {
     let upid = pbs_client::connect_to_remote_by_id(&remote)?
         .run_datastore_gc(&datastore)
@@ -212,11 +220,16 @@ pub async fn run_gc(remote: String, datastore: String) -> Result<RemoteUpid, Err
             request: { type: PbsPruneRequest, flatten: true },
         },
     },
-    returns: { type: Array, items: { type: PbsPruneResult } },
+    returns: {
+        description: "Prune operation results.",
+        type: Array,
+        items: { type: PbsPruneResult },
+    },
     access: {
         permission: &Permission::Privilege(&["resource", "{remote}", "datastore", "{datastore}"], PRIV_RESOURCE_MANAGE, false),
     },
 )]
+/// Prune expired backup groups in a datastore.
 pub async fn prune_datastore(
     remote: String,
     datastore: String,
@@ -239,6 +252,7 @@ pub async fn prune_datastore(
         permission: &Permission::Privilege(&["resource", "{remote}", "datastore", "{datastore}"], PRIV_RESOURCE_MANAGE, false),
     },
 )]
+/// Set snapshot protection state.
 pub async fn set_snapshot_protection(
     remote: String,
     datastore: String,
@@ -262,6 +276,7 @@ pub async fn set_snapshot_protection(
         permission: &Permission::Privilege(&["resource", "{remote}", "datastore", "{datastore}"], PRIV_RESOURCE_MANAGE, false),
     },
 )]
+/// Set snapshot notes.
 pub async fn set_snapshot_notes(
     remote: String,
     datastore: String,
@@ -281,11 +296,12 @@ pub async fn set_snapshot_notes(
             snapshot: { type: PbsSnapshotRef, flatten: true },
         },
     },
-    returns: { type: RemoteUpid },
+    returns: { description: "Remote task identifier.", type: RemoteUpid },
     access: {
         permission: &Permission::Privilege(&["resource", "{remote}", "datastore", "{datastore}"], PRIV_RESOURCE_MANAGE, false),
     },
 )]
+/// Start snapshot verification.
 pub async fn verify_snapshot(
     remote: String,
     datastore: String,
@@ -309,6 +325,7 @@ pub async fn verify_snapshot(
         permission: &Permission::Privilege(&["resource", "{remote}", "datastore", "{datastore}"], PRIV_RESOURCE_MANAGE, false),
     },
 )]
+/// Forget a snapshot.
 pub async fn forget_snapshot(
     remote: String,
     datastore: String,
