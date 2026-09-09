@@ -48,6 +48,7 @@ pub struct CreateQemu {
     #[serde(skip_serializing_if = "Option::is_none")]
     pub start: Option<bool>,
 
+    /// Native PVE guest-agent property string.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub agent: Option<String>,
 }
@@ -73,6 +74,7 @@ pub struct CreateLxc {
     #[serde(skip_serializing_if = "Option::is_none")]
     pub ssh_public_keys: Option<String>,
 
+    /// Number of virtual CPU cores.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub cores: Option<u64>,
 
@@ -127,6 +129,7 @@ pub struct UpdateQemu {
     pub onboot: Option<bool>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub startup: Option<String>,
+    /// Native PVE guest-agent property string.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub agent: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -144,6 +147,7 @@ pub struct UpdateLxc {
     pub hostname: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub description: Option<String>,
+    /// Number of virtual CPU cores.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub cores: Option<u64>,
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -182,6 +186,7 @@ pub struct CloneQemu {
     pub storage: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub format: Option<String>,
+    /// Optional description for the cloned VM.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub description: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -204,6 +209,7 @@ pub struct CloneLxc {
     pub target: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub storage: Option<String>,
+    /// Optional description for the cloned container.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub description: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]

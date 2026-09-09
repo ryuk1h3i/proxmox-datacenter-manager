@@ -25,6 +25,7 @@ pub struct PveBackupJob {
     pub vmid: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub exclude: Option<String>,
+    /// Back up all guests when set.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub all: Option<bool>,
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -64,6 +65,7 @@ pub struct PveBackupJobConfig {
     pub vmid: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub exclude: Option<String>,
+    /// Back up all guests when set.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub all: Option<bool>,
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -90,6 +92,7 @@ pub struct PveVzdumpRequest {
     pub vmid: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub pool: Option<String>,
+    /// Back up all guests when set.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub all: Option<bool>,
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -121,6 +124,7 @@ pub struct PveReplicationJob {
     pub rate: Option<f64>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub disable: Option<bool>,
+    /// Optional job comment.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub comment: Option<String>,
     #[serde(rename = "type", skip_serializing_if = "Option::is_none")]
@@ -140,6 +144,7 @@ pub struct PveReplicationJobConfig {
     pub rate: Option<f64>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub disable: Option<bool>,
+    /// Optional job comment.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub comment: Option<String>,
     #[serde(rename = "type", skip_serializing_if = "Option::is_none")]
@@ -158,6 +163,7 @@ pub struct PveReplicationStatus {
     pub last_sync: Option<i64>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub next_sync: Option<i64>,
+    /// Duration of the previous replication run in seconds.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub duration: Option<f64>,
     #[serde(skip_serializing_if = "Option::is_none")]

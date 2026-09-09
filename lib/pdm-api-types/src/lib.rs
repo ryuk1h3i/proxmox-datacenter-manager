@@ -172,6 +172,10 @@ pub const PDM_PASSWORD_SCHEMA: Schema = StringSchema::new("User Password.")
     .max_length(64)
     .schema();
 
+pub const PROXMOX_SAFE_ID_SCHEMA: Schema = StringSchema::new("Proxmox-safe identifier.")
+    .format(&PROXMOX_SAFE_ID_FORMAT)
+    .schema();
+
 pub const REALM_ID_SCHEMA: Schema = StringSchema::new("Realm name.")
     .format(&PROXMOX_SAFE_ID_FORMAT)
     .min_length(2)

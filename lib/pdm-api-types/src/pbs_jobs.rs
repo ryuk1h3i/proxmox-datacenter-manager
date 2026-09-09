@@ -15,6 +15,7 @@ pub struct PbsPruneJob {
     pub schedule: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub disable: Option<bool>,
+    /// Optional job comment.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub comment: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -46,6 +47,7 @@ pub struct PbsVerifyJob {
     pub schedule: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub disable: Option<bool>,
+    /// Optional job comment.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub comment: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -77,6 +79,7 @@ pub struct PbsSyncJob {
     pub disable: Option<bool>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub remove_vanished: Option<bool>,
+    /// Optional job comment.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub comment: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -94,6 +97,7 @@ pub struct PbsGcStatus {
     pub upid: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub status: Option<String>,
+    /// End time of the previous garbage-collection run.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub last_run_endtime: Option<i64>,
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -111,6 +115,7 @@ pub struct PbsGcStatus {
 pub struct PbsPruneRequest {
     #[serde(skip_serializing_if = "Option::is_none")]
     pub ns: Option<String>,
+    /// Calculate the prune result without deleting snapshots.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub dry_run: Option<bool>,
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -133,6 +138,7 @@ pub struct PbsPruneRequest {
 #[serde(rename_all = "kebab-case")]
 pub struct PbsPruneResult {
     pub backup_type: String,
+    /// Backup group identifier.
     pub backup_id: String,
     pub backup_time: i64,
     pub keep: bool,
@@ -146,6 +152,7 @@ pub struct PbsPruneResult {
 #[serde(rename_all = "kebab-case")]
 pub struct PbsSnapshotRef {
     pub backup_type: String,
+    /// Backup group identifier.
     pub backup_id: String,
     pub backup_time: i64,
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -153,21 +160,37 @@ pub struct PbsSnapshotRef {
 }
 
 /// Update the protection flag of a PBS backup snapshot.
-#[api]
+#[api(
+    properties: {
+        snapshot: {
+            type: PbsSnapshotRef,
+            flatten: true,
+        },
+    },
+)]
 #[derive(Clone, Debug, Deserialize, PartialEq, Serialize)]
 #[serde(rename_all = "kebab-case")]
 pub struct PbsSnapshotProtection {
     #[serde(flatten)]
     pub snapshot: PbsSnapshotRef,
+    /// Whether the snapshot is protected from deletion.
     pub protected: bool,
 }
 
 /// Update notes attached to a PBS backup snapshot.
-#[api]
+#[api(
+    properties: {
+        snapshot: {
+            type: PbsSnapshotRef,
+            flatten: true,
+        },
+    },
+)]
 #[derive(Clone, Debug, Deserialize, PartialEq, Serialize)]
 #[serde(rename_all = "kebab-case")]
 pub struct PbsSnapshotNotes {
     #[serde(flatten)]
     pub snapshot: PbsSnapshotRef,
+    /// Notes to attach to the snapshot.
     pub notes: String,
 }
