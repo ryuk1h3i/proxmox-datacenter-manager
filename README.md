@@ -79,19 +79,24 @@ pulling it.
 
 ### Run with Docker Compose
 
-Create a local file containing only the initial password for `admin@pdm`, then point Compose to it:
+Copy `.env.example` to `.env` and set the initial password for `admin@pdm`:
 
 ```sh
-printf '%s' 'replace-with-a-strong-password' > pdm-admin-password
-chmod 600 pdm-admin-password
-printf '%s\n' 'PDM_ADMIN_PASSWORD_FILE=./pdm-admin-password' > .env
+cp .env.example .env
+$EDITOR .env
+chmod 600 .env
 docker compose pull
 docker compose up -d
 ```
 
-The service is available at `https://localhost:8443`. The password file is mounted as a Docker
-secret and is used only to bootstrap `admin@pdm`; configuration, state, cache and task logs are kept
-in named Docker volumes.
+The service is available at `https://localhost:8443`. Compose passes `PDM_ADMIN_PASSWORD` to the
+container as the Docker secret `/run/secrets/pdm-admin-password`, which is read only to bootstrap
+`admin@pdm`; change the password from the web interface afterwards. Configuration, state, cache and
+task logs are kept in named Docker volumes.
+
+Defining the secret from an environment variable requires Docker Compose v2.24 or later. The value
+is stored in clear text in `.env` and is visible through `docker compose config`, so restrict access
+to that file.
 
 To deploy a specific immutable build, set `PDM_IMAGE` in `.env`:
 

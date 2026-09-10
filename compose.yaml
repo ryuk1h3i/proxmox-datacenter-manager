@@ -18,7 +18,7 @@ services:
 
 secrets:
   pdm-admin-password:
-    file: ${PDM_ADMIN_PASSWORD_FILE}
+    environment: PDM_ADMIN_PASSWORD
 
 volumes:
   pdm-config:

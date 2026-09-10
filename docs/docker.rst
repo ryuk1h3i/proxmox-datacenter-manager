@@ -5,10 +5,10 @@ This variant runs Proxmox Datacenter Manager as an application container. It man
 VE and Proxmox Backup Server systems, but does not administer the operating system hosting the
 container.
 
-Create a file containing only the initial administrator password and expose its path through
-``PDM_ADMIN_PASSWORD_FILE`` when invoking Docker Compose. The secret is read from
-``/run/secrets/pdm-admin-password`` during the first setup. Existing password data is never replaced
-on subsequent starts.
+Set the initial administrator password in ``PDM_ADMIN_PASSWORD`` before invoking Docker Compose,
+for example by copying ``.env.example`` to ``.env``. Compose exposes the value to the container as
+the secret ``/run/secrets/pdm-admin-password``, which is read during the first setup. Existing
+password data is never replaced on subsequent starts.
 
 Build and start the service with Docker Compose. The web interface is available over HTTPS on port
 8443. The initial account is ``admin@pdm``.

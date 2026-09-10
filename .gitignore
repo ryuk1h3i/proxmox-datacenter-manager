@@ -7,6 +7,7 @@
 *.tar.?z
 *~
 .create-shell-completions
+/.env
 /docs/*/synopsis.rst
 /docs/_ext/__pycache__/
 /docs/api-viewer/*.css
