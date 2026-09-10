@@ -738,6 +738,9 @@ async fn create_qemu(
 ) -> Result<(), Error> {
     let remote = form_ctx.read().get_field_text("remote");
     let node = form_ctx.read().get_field_text("node");
+    if node.is_empty() {
+        anyhow::bail!("select a node");
+    }
     let mut data = form_ctx.get_submit_data();
     let media = form_ctx.read().get_field_text("media-selection");
     if !media.is_empty() {
@@ -772,6 +775,9 @@ async fn create_lxc(
 ) -> Result<(), Error> {
     let remote = form_ctx.read().get_field_text("remote");
     let node = form_ctx.read().get_field_text("node");
+    if node.is_empty() {
+        anyhow::bail!("select a node");
+    }
     let mut data = form_ctx.get_submit_data();
     let template = form_ctx.read().get_field_text("media-selection");
     if !template.is_empty() {
@@ -866,6 +872,14 @@ fn target_fields(form_ctx: &FormContext, panel: InputPanel) -> InputPanel {
                 .name("node")
                 .key(format!("create-node-{remote}"))
                 .show_memory(true)
+                .on_change({
+                    let form_ctx = form_ctx.clone();
+                    move |node: Option<AttrValue>| {
+                        form_ctx
+                            .write()
+                            .set_field_value("node", node.unwrap_or_default().into());
+                    }
+                })
                 .required(true),
         )
     }
@@ -911,6 +925,7 @@ fn create_qemu_input_panel(form_ctx: &FormContext) -> Html {
                 .name("media-storage")
                 .node(AttrValue::from(node.clone()))
                 .content_types(vec![StorageContent::Iso])
+                .on_change(store_selector_value(form_ctx, "media-storage"))
                 .disabled(remote.is_empty() || node.is_empty()),
         )
         .with_right_field(tr!("Media filename"), Field::new().name("media-filename"))
@@ -929,6 +944,7 @@ fn create_qemu_input_panel(form_ctx: &FormContext) -> Html {
                 .name("disk-storage")
                 .node(AttrValue::from(node.clone()))
                 .content_types(vec![StorageContent::Images])
+                .on_change(store_selector_value(form_ctx, "disk-storage"))
                 .disabled(remote.is_empty() || node.is_empty())
                 .required(true),
         )
@@ -942,6 +958,7 @@ fn create_qemu_input_panel(form_ctx: &FormContext) -> Html {
                 .key(format!("network-{remote}-{node}"))
                 .name("network-bridge")
                 .node(AttrValue::from(node.clone()))
+                .on_change(store_selector_value(form_ctx, "network-bridge"))
                 .disabled(remote.is_empty() || node.is_empty())
                 .required(true),
         )
@@ -985,6 +1002,7 @@ fn create_lxc_input_panel(form_ctx: &FormContext) -> Html {
                 .name("media-storage")
                 .node(AttrValue::from(node.clone()))
                 .content_types(vec![StorageContent::Vztmpl])
+                .on_change(store_selector_value(form_ctx, "media-storage"))
                 .disabled(remote.is_empty() || node.is_empty()),
         )
         .with_right_field(tr!("Template filename"), Field::new().name("media-filename"))
@@ -1011,6 +1029,7 @@ fn create_lxc_input_panel(form_ctx: &FormContext) -> Html {
                 .name("disk-storage")
                 .node(AttrValue::from(node.clone()))
                 .content_types(vec![StorageContent::Rootdir])
+                .on_change(store_selector_value(form_ctx, "disk-storage"))
                 .disabled(remote.is_empty() || node.is_empty())
                 .required(true),
         )
@@ -1024,6 +1043,7 @@ fn create_lxc_input_panel(form_ctx: &FormContext) -> Html {
                 .key(format!("network-{remote}-{node}"))
                 .name("network-bridge")
                 .node(AttrValue::from(node.clone()))
+                .on_change(store_selector_value(form_ctx, "network-bridge"))
                 .disabled(remote.is_empty() || node.is_empty())
                 .required(true),
         )
@@ -1038,6 +1058,18 @@ fn create_lxc_input_panel(form_ctx: &FormContext) -> Html {
             Checkbox::new().name("start").default(false),
         )
         .into()
+}
+
+fn store_selector_value(
+    form_ctx: &FormContext,
+    field: &'static str,
+) -> Callback<Option<AttrValue>> {
+    let form_ctx = form_ctx.clone();
+    Callback::from(move |value: Option<AttrValue>| {
+        form_ctx
+            .write()
+            .set_field_value(field, value.unwrap_or_default().into());
+    })
 }
 
 fn failed_remotes_banner(failed: &[String]) -> Html {
