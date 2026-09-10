@@ -54,8 +54,8 @@ use crate::renderer::{empty_state, render_resource_name, render_status_icon, ren
 use crate::{
     get_deep_url, get_resource_node,
     widget::{
-        MigrateWindow, PveMediaSelector, PveNetworkSelector, PveNodeSelector, PveStorageSelector,
-        RemoteSelector, SnapshotWindow,
+        MigrateWindow, PveMediaSelector, PveNetworkSelector, PveNodeResources, PveNodeSelector,
+        PveStorageSelector, RemoteSelector, SnapshotWindow,
     },
 };
 
@@ -849,6 +849,7 @@ async fn prepare_media(
 
 fn target_fields(form_ctx: &FormContext, panel: InputPanel) -> InputPanel {
     let remote = form_ctx.read().get_field_text("remote");
+    let node = form_ctx.read().get_field_text("node");
     let panel = panel.with_field(
         tr!("Remote"),
         RemoteSelector::new()
@@ -857,7 +858,7 @@ fn target_fields(form_ctx: &FormContext, panel: InputPanel) -> InputPanel {
             .required(true),
     );
 
-    if remote.is_empty() {
+    let panel = if remote.is_empty() {
         panel.with_field(
             tr!("Node"),
             DisplayField::new()
@@ -882,7 +883,13 @@ fn target_fields(form_ctx: &FormContext, panel: InputPanel) -> InputPanel {
                 })
                 .required(true),
         )
-    }
+    };
+
+    panel.with_large_custom_child(
+        Container::new()
+            .key("node-resources")
+            .with_child(PveNodeResources::new(remote, node)),
+    )
 }
 
 fn create_qemu_input_panel(form_ctx: &FormContext) -> Html {

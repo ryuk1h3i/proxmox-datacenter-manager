@@ -1887,10 +1887,13 @@ impl<T: HttpApiClient> PdmClient<T> {
         node: &str,
         config: &CreateQemu,
     ) -> Result<RemoteUpid, Error> {
-        let path = format!("/api2/extjs/pve/remotes/{remote}/qemu?node={node}");
+        let path = format!("/api2/extjs/pve/remotes/{remote}/qemu");
+        // the query string is ignored for JSON bodies, so `node` has to go into the body
+        let mut request = serde_json::to_value(config).expect("failed to serialize config");
+        request["node"] = node.into();
         Ok(self
             .0
-            .post(&path, config)
+            .post(&path, &request)
             .await?
             .expect_json()?
             .data)
@@ -1902,10 +1905,13 @@ impl<T: HttpApiClient> PdmClient<T> {
         node: &str,
         config: &CreateLxc,
     ) -> Result<RemoteUpid, Error> {
-        let path = format!("/api2/extjs/pve/remotes/{remote}/lxc?node={node}");
+        let path = format!("/api2/extjs/pve/remotes/{remote}/lxc");
+        // the query string is ignored for JSON bodies, so `node` has to go into the body
+        let mut request = serde_json::to_value(config).expect("failed to serialize config");
+        request["node"] = node.into();
         Ok(self
             .0
-            .post(&path, config)
+            .post(&path, &request)
             .await?
             .expect_json()?
             .data)

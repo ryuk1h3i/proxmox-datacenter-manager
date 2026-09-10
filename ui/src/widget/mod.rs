@@ -7,6 +7,9 @@ pub use snapshot_window::SnapshotWindow;
 mod pve_node_selector;
 pub use pve_node_selector::PveNodeSelector;
 
+mod pve_node_resources;
+pub use pve_node_resources::PveNodeResources;
+
 mod pve_network_selector;
 pub use pve_network_selector::PveNetworkSelector;
 
