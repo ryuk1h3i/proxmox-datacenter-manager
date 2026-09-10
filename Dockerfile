@@ -37,26 +37,24 @@ WORKDIR /source
 
 # The build dependencies are derived from the control files alone, so resolving
 # them in their own layer keeps that (slow) apt step cached when only sources
-# change.
-FROM base AS deps-api
+# change. Both sets go in together: the UI package also builds the shared lib/
+# crates, whose dependencies are declared in the main control file only.
+FROM base AS deps
 COPY debian/control debian/control
+COPY ui/debian/control ui/debian/control
 RUN apt-get update \
     && mk-build-deps --install --remove \
-        --tool 'apt-get -y --no-install-recommends' debian/control
+        --tool 'apt-get -y --no-install-recommends' debian/control \
+    && mk-build-deps --install --remove \
+        --tool 'apt-get -y --no-install-recommends' ui/debian/control
 
-FROM deps-api AS build-api
+FROM deps AS build-api
 COPY . .
 RUN make LINTIAN=true deb-api \
     && mkdir /packages \
     && cp ./*.deb /packages/
 
-FROM base AS deps-ui
-COPY ui/debian/control ui/debian/control
-RUN apt-get update \
-    && mk-build-deps --install --remove \
-        --tool 'apt-get -y --no-install-recommends' ui/debian/control
-
-FROM deps-ui AS build-ui
+FROM deps AS build-ui
 COPY . .
 RUN make LINTIAN=true deb-ui \
     && mkdir /packages \

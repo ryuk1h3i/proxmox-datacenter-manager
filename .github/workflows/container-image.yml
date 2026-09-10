@@ -27,6 +27,8 @@ jobs:
     runs-on: ubuntu-latest
 
     strategy:
+      # Let the sibling finish and export its cache even if one component fails.
+      fail-fast: false
       matrix:
         component: [api, ui]
 
