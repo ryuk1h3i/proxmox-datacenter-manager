@@ -2,7 +2,6 @@ use std::future::Future;
 use std::pin::Pin;
 use std::rc::Rc;
 
-use anyhow::Error;
 use anyhow::{Error, bail};
 use yew::virtual_dom::{Key, VComp, VNode};
 

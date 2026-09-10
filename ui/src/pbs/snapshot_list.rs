@@ -440,12 +440,13 @@ impl Component for SnapshotListComp {
                     let snapshot = snapshot.clone();
                     let remote = props.remote.clone();
                     let datastore = props.datastore.clone();
+                    let forget_link = ctx.link().clone();
                     view.add_child(ConfirmDialog::new(tr!("Confirm"), tr!("Permanently forget the selected snapshot?"))
                         .on_confirm(move |_| {
                             let snapshot = snapshot.clone();
                             let remote = remote.clone();
                             let datastore = datastore.clone();
-                            let link = link.clone();
+                            let link = forget_link.clone();
                             wasm_bindgen_futures::spawn_local(async move {
                                 let result = crate::pdm_client()
                                     .pbs_forget_snapshot(&remote, &datastore, &snapshot)
