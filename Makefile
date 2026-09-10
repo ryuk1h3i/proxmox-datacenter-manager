@@ -19,6 +19,8 @@ UI_DEB:=$(wildcard $(PACKAGE)-ui_*_$(DEB_HOST_ARCH).deb)
 DSC=$(PACKAGE)_$(DEB_VERSION).dsc
 
 CARGO ?= cargo
+# Set to 'true' to skip the (slow) package checks, e.g. for container builds.
+LINTIAN ?= lintian
 ifeq ($(BUILD_MODE), release)
 CARGO_BUILD_ARGS += --release
 COMPILEDIR := target/release
@@ -111,7 +113,7 @@ deb: deb-api deb-ui
 deb-api: $(DEB)
 $(DEB) $(DBG_DEB) $(CLIENT_DEB) $(CLIENT_DBG_DEB) $(DOC_DEB) &: $(BUILDDIR)
 	cd $(BUILDDIR); dpkg-buildpackage -b -uc -us
-	lintian $(DEB) $(CLIENT_DEB) $(DOC_DEB)
+	$(LINTIAN) $(DEB) $(CLIENT_DEB) $(DOC_DEB)
 
 .PHONY: dsc
 dsc:

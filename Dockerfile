@@ -1,4 +1,4 @@
-FROM debian:trixie AS builder
+FROM debian:trixie AS base
 
 ARG DEBIAN_FRONTEND=noninteractive
 
@@ -29,16 +29,45 @@ RUN apt-get update \
         > /etc/apt/sources.list.d/proxmox-devel.sources \
     && apt-get update
 
-WORKDIR /source
-COPY . .
+# Skip the test suite and the debug symbol packages, which the runtime image
+# never installs.
+ENV DEB_BUILD_OPTIONS="nocheck noautodbgsym"
 
-RUN mk-build-deps --install --remove \
-        --tool 'apt-get -y --no-install-recommends' debian/control \
+WORKDIR /source
+
+# The build dependencies are derived from the control files alone, so resolving
+# them in their own layer keeps that (slow) apt step cached when only sources
+# change.
+FROM base AS deps-api
+COPY debian/control debian/control
+RUN apt-get update \
     && mk-build-deps --install --remove \
-        --tool 'apt-get -y --no-install-recommends' ui/debian/control \
-    && DEB_BUILD_OPTIONS=nocheck make deb \
+        --tool 'apt-get -y --no-install-recommends' debian/control
+
+FROM deps-api AS build-api
+COPY . .
+RUN make LINTIAN=true deb-api \
     && mkdir /packages \
     && cp ./*.deb /packages/
+
+FROM base AS deps-ui
+COPY ui/debian/control ui/debian/control
+RUN apt-get update \
+    && mk-build-deps --install --remove \
+        --tool 'apt-get -y --no-install-recommends' ui/debian/control
+
+FROM deps-ui AS build-ui
+COPY . .
+RUN make LINTIAN=true deb-ui \
+    && mkdir /packages \
+    && cp ./*.deb /packages/
+
+# Export-only stages, so CI can pull the debs out without the build tree.
+FROM scratch AS api-packages
+COPY --from=build-api /packages/ /
+
+FROM scratch AS ui-packages
+COPY --from=build-ui /packages/ /
 
 FROM debian:trixie-slim
 
@@ -57,7 +86,8 @@ RUN apt-get update \
         > /etc/apt/sources.list.d/proxmox.sources \
     && apt-get update
 
-COPY --from=builder /packages /packages
+COPY --from=build-api /packages /packages
+COPY --from=build-ui /packages /packages
 RUN apt-get install -y --no-install-recommends \
         /packages/proxmox-datacenter-manager_*.deb \
         /packages/proxmox-datacenter-manager-docs_*.deb \

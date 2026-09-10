@@ -10,6 +10,8 @@ DEB=$(PACKAGE)_$(DEB_VERSION)_$(DEB_HOST_ARCH).deb
 DSC=$(PACKAGE)_$(DEB_VERSION).dsc
 
 CARGO ?= cargo
+# Set to 'true' to skip the (slow) package checks, e.g. for container builds.
+LINTIAN ?= lintian
 ifeq ($(BUILD_MODE), release)
 CARGO_BUILD_ARGS += --release
 COMPILEDIR := target/release
@@ -98,7 +100,7 @@ deb: $(DEB)
 $(DEB): $(BUILDDIR)
 	cd $(BUILDDIR)/ui; dpkg-buildpackage -b -uc -us
 	mv $(BUILDDIR)/*.deb ./
-	lintian $(DEB)
+	$(LINTIAN) $(DEB)
 	@echo $(DEB)
 
 .PHONY: dsc
