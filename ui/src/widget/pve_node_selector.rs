@@ -1,7 +1,7 @@
 use std::rc::Rc;
 
 use anyhow::Error;
-use proxmox_yew_comp::{Status, rrd_value_renderer};
+use proxmox_yew_comp::Status;
 use yew::{
     AttrValue, Callback, Component, Properties, html,
     html::{IntoEventCallback, IntoPropValue},
@@ -212,10 +212,12 @@ fn columns(show_memory: bool) -> Rc<Vec<DataTableHeader<ClusterNodeIndexResponse
     ];
     if show_memory {
         columns.push(
-            DataTableColumn::new(tr!("CPU Usage"))
-                .render(|entry: &ClusterNodeIndexResponse| match entry.cpu {
-                    Some(cpu) => html! { rrd_value_renderer::render_cpu_usage(&cpu) },
-                    None => html! {},
+            DataTableColumn::new(tr!("CPU Available"))
+                .render(|entry: &ClusterNodeIndexResponse| match (entry.cpu, entry.maxcpu) {
+                    (Some(cpu), Some(maxcpu)) => {
+                        html! {format!("{:.1} / {maxcpu}", (1.0 - cpu) * maxcpu as f64)}
+                    }
+                    _ => html! {},
                 })
                 .sorter(
                     |a: &ClusterNodeIndexResponse, b: &ClusterNodeIndexResponse| {
@@ -229,11 +231,17 @@ fn columns(show_memory: bool) -> Rc<Vec<DataTableHeader<ClusterNodeIndexResponse
                 .into(),
         );
         columns.push(
-            DataTableColumn::new(tr!("Memory Usage"))
+            DataTableColumn::new(tr!("Memory Available"))
                 .render(
                     |entry: &ClusterNodeIndexResponse| match (entry.mem, entry.maxmem) {
                         (Some(mem), Some(maxmem)) => {
-                            html! {format!("{:.2}%", 100.0 * mem as f64 / maxmem as f64)}
+                            html! {format!(
+                                "{:.2} / {:.2}",
+                                proxmox_human_byte::HumanByte::new_decimal(
+                                    maxmem.saturating_sub(mem) as f64,
+                                ),
+                                proxmox_human_byte::HumanByte::new_decimal(maxmem as f64),
+                            )}
                         }
                         _ => html! {},
                     },

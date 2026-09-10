@@ -36,10 +36,11 @@ use pwt::widget::form::{Checkbox, DisplayField, Field, FormContext, Number};
 use pwt::widget::form::Combobox;
 use pwt::widget::menu::{Menu, MenuButton, MenuItem};
 use pwt::widget::{
-    ActionIcon, Button, Column, Container, Fa, InputPanel, MessageBox, MessageBoxButtons, Row,
-    SegmentedButton, Toolbar, Tooltip, Trigger,
+    ActionIcon, Button, Column, Container, Dialog, Fa, InputPanel, MessageBox, MessageBoxButtons,
+    Row, SegmentedButton, Toolbar, Tooltip, Trigger,
 };
 
+use pdm_client::types::StorageContent;
 use pdm_api_types::guest::{CreateLxc, CreateQemu};
 use pdm_api_types::media::{MediaContentType, PveDownloadUrl};
 use pdm_api_types::remotes::RemoteType;
@@ -52,7 +53,10 @@ use crate::pve::{GuestInfo, GuestType};
 use crate::renderer::{empty_state, render_resource_name, render_status_icon, render_tree_column};
 use crate::{
     get_deep_url, get_resource_node,
-    widget::{MigrateWindow, PveNodeSelector, RemoteSelector, SnapshotWindow},
+    widget::{
+        MigrateWindow, PveMediaSelector, PveNetworkSelector, PveNodeSelector, PveStorageSelector,
+        RemoteSelector, SnapshotWindow,
+    },
 };
 
 /// Auto-reload interval for the cross-remote resource list.
@@ -217,6 +221,7 @@ pub enum ViewState {
     /// Open the migration dialog for the given (remote, source-node, guest).
     Migrate(String, String, GuestInfo),
     Snapshots(String, GuestInfo, String),
+    Console(String, String, GuestInfo),
 }
 
 pub enum Msg {
@@ -674,6 +679,35 @@ impl LoadableComponent for GuestPanelComp {
                     .on_close(ctx.link().change_view_callback(|_| None))
                     .into(),
             ),
+            ViewState::Console(remote, node, guest_info) => {
+                let mut console = proxmox_yew_comp::XTermJs::new();
+                console.set_node_name(node.clone());
+                match guest_info.guest_type {
+                    GuestType::Qemu => {
+                        console.set_vnc(true);
+                        console.set_console_type(proxmox_yew_comp::ConsoleType::RemotePveKVM(
+                            remote.clone(),
+                            guest_info.vmid as u64,
+                        ));
+                    }
+                    GuestType::Lxc => {
+                        console.set_console_type(proxmox_yew_comp::ConsoleType::RemotePveLXC(
+                            remote.clone(),
+                            guest_info.vmid as u64,
+                        ));
+                    }
+                }
+                Some(
+                    Dialog::new(tr!("Console - {0}", guest_info.vmid))
+                        .min_width(900)
+                        .min_height(650)
+                        .max_height("90vh")
+                        .resizable(true)
+                        .on_close(ctx.link().change_view_callback(|_| None))
+                        .with_child(console)
+                        .into(),
+                )
+            }
         }
     }
 
@@ -704,7 +738,23 @@ async fn create_qemu(
 ) -> Result<(), Error> {
     let remote = form_ctx.read().get_field_text("remote");
     let node = form_ctx.read().get_field_text("node");
-    let mut config: CreateQemu = serde_json::from_value(form_ctx.get_submit_data())?;
+    let mut data = form_ctx.get_submit_data();
+    let media = form_ctx.read().get_field_text("media-selection");
+    if !media.is_empty() {
+        data["ide2"] = serde_json::Value::String(format!("{media},media=cdrom"));
+    }
+    let disk_storage = form_ctx.read().get_field_text("disk-storage");
+    let disk_size = form_ctx.read().get_field_text("disk-size");
+    if !disk_storage.is_empty() && !disk_size.is_empty() {
+        data["scsi0"] = serde_json::Value::String(format!(
+            "{disk_storage}:{disk_size},discard=on,iothread=1"
+        ));
+    }
+    let bridge = form_ctx.read().get_field_text("network-bridge");
+    if !bridge.is_empty() {
+        data["net0"] = serde_json::Value::String(format!("virtio,bridge={bridge}"));
+    }
+    let mut config: CreateQemu = serde_json::from_value(data)?;
     if let Some(volid) = prepare_media(&form_ctx, &remote, &node, MediaContentType::Iso).await? {
         config.ide2 = Some(format!("{volid},media=cdrom"));
     }
@@ -723,6 +773,20 @@ async fn create_lxc(
     let remote = form_ctx.read().get_field_text("remote");
     let node = form_ctx.read().get_field_text("node");
     let mut data = form_ctx.get_submit_data();
+    let template = form_ctx.read().get_field_text("media-selection");
+    if !template.is_empty() {
+        data["ostemplate"] = serde_json::Value::String(template);
+    }
+    let disk_storage = form_ctx.read().get_field_text("disk-storage");
+    let disk_size = form_ctx.read().get_field_text("disk-size");
+    if !disk_storage.is_empty() && !disk_size.is_empty() {
+        data["rootfs"] = serde_json::Value::String(format!("{disk_storage}:{disk_size}"));
+    }
+    let bridge = form_ctx.read().get_field_text("network-bridge");
+    if !bridge.is_empty() {
+        data["net0"] =
+            serde_json::Value::String(format!("name=eth0,bridge={bridge},ip=dhcp"));
+    }
     if let Some(volid) = prepare_media(&form_ctx, &remote, &node, MediaContentType::Vztmpl).await? {
         data["ostemplate"] = serde_json::Value::String(volid);
     }
@@ -808,6 +872,8 @@ fn target_fields(form_ctx: &FormContext, panel: InputPanel) -> InputPanel {
 }
 
 fn create_qemu_input_panel(form_ctx: &FormContext) -> Html {
+    let remote = form_ctx.read().get_field_text("remote");
+    let node = form_ctx.read().get_field_text("node");
     target_fields(form_ctx, InputPanel::new().padding(4).min_width(700))
         .with_field(
             "VMID",
@@ -824,15 +890,16 @@ fn create_qemu_input_panel(form_ctx: &FormContext) -> Html {
         )
         .with_large_field(
             tr!("Installation media"),
-            Field::new()
-                .name("ide2")
-                .placeholder("storage:iso/image.iso,media=cdrom"),
+            media_selector(&remote, &node, MediaContentType::Iso),
         )
         .with_large_field(
             tr!("Download media URL"),
             Field::new().name("media-url").placeholder("https://example.invalid/image.iso"),
         )
-        .with_field(tr!("Media storage"), Field::new().name("media-storage"))
+        .with_field(
+            tr!("Media storage"),
+            storage_selector(&remote, &node, StorageContent::Iso, "media-storage", false),
+        )
         .with_right_field(tr!("Media filename"), Field::new().name("media-filename"))
         .with_field(
             tr!("Checksum algorithm"),
@@ -842,18 +909,15 @@ fn create_qemu_input_panel(form_ctx: &FormContext) -> Html {
                 .items(Rc::new(vec!["sha256".into(), "sha512".into()])),
         )
         .with_right_field(tr!("Checksum"), Field::new().name("media-checksum"))
-        .with_large_field(
-            tr!("System disk"),
-            Field::new()
-                .name("scsi0")
-                .placeholder("storage:32,discard=on,iothread=1"),
+        .with_field(
+            tr!("System disk storage"),
+            storage_selector(&remote, &node, StorageContent::Images, "disk-storage", true),
         )
-        .with_large_field(
-            tr!("Network"),
-            Field::new()
-                .name("net0")
-                .placeholder("virtio,bridge=vmbr0"),
+        .with_right_field(
+            tr!("Disk size (GiB)"),
+            Number::new().name("disk-size").min(1u64).default(32u64),
         )
+        .with_large_field(tr!("Network bridge"), network_selector(&remote, &node))
         .with_large_field(tr!("Description"), Field::new().name("description"))
         .with_large_field(
             tr!("Start after creation"),
@@ -863,6 +927,8 @@ fn create_qemu_input_panel(form_ctx: &FormContext) -> Html {
 }
 
 fn create_lxc_input_panel(form_ctx: &FormContext) -> Html {
+    let remote = form_ctx.read().get_field_text("remote");
+    let node = form_ctx.read().get_field_text("node");
     target_fields(form_ctx, InputPanel::new().padding(4).min_width(700))
         .with_field(
             "VMID",
@@ -871,15 +937,22 @@ fn create_lxc_input_panel(form_ctx: &FormContext) -> Html {
         .with_field(tr!("Hostname"), Field::new().name("hostname"))
         .with_large_field(
             tr!("Template"),
-            Field::new()
-                .name("ostemplate")
-                .placeholder("storage:vztmpl/template.tar.zst"),
+            media_selector(&remote, &node, MediaContentType::Vztmpl),
         )
         .with_large_field(
             tr!("Download template URL"),
             Field::new().name("media-url").placeholder("https://example.invalid/template.tar.zst"),
         )
-        .with_field(tr!("Template storage"), Field::new().name("media-storage"))
+        .with_field(
+            tr!("Template storage"),
+            storage_selector(
+                &remote,
+                &node,
+                StorageContent::Vztmpl,
+                "media-storage",
+                false,
+            ),
+        )
         .with_right_field(tr!("Template filename"), Field::new().name("media-filename"))
         .with_field(
             tr!("Checksum algorithm"),
@@ -897,16 +970,15 @@ fn create_lxc_input_panel(form_ctx: &FormContext) -> Html {
             tr!("Memory (MiB)"),
             Number::new().name("memory").min(16u64).placeholder("2048"),
         )
-        .with_large_field(
-            tr!("Root disk"),
-            Field::new().name("rootfs").placeholder("storage:8"),
+        .with_field(
+            tr!("Root disk storage"),
+            storage_selector(&remote, &node, StorageContent::Rootdir, "disk-storage", true),
         )
-        .with_large_field(
-            tr!("Network"),
-            Field::new()
-                .name("net0")
-                .placeholder("name=eth0,bridge=vmbr0,ip=dhcp"),
+        .with_right_field(
+            tr!("Disk size (GiB)"),
+            Number::new().name("disk-size").min(1u64).default(8u64),
         )
+        .with_large_field(tr!("Network bridge"), network_selector(&remote, &node))
         .with_large_field(tr!("SSH public keys"), Field::new().name("ssh-public-keys"))
         .with_large_field(tr!("Description"), Field::new().name("description"))
         .with_large_field(
@@ -917,6 +989,57 @@ fn create_lxc_input_panel(form_ctx: &FormContext) -> Html {
             tr!("Start after creation"),
             Checkbox::new().name("start").default(false),
         )
+        .into()
+}
+
+fn media_selector(remote: &str, node: &str, content: MediaContentType) -> Html {
+    if remote.is_empty() || node.is_empty() {
+        return DisplayField::new()
+            .name("media-selection")
+            .value(tr!("Select a remote and node first."))
+            .into();
+    }
+    PveMediaSelector::new(remote.to_string(), Some(AttrValue::from(node.to_string())), content)
+        .key(format!("media-{remote}-{node}-{content}"))
+        .name("media-selection")
+        .placeholder(tr!("Select existing media or use a download URL below"))
+        .into()
+}
+
+fn storage_selector(
+    remote: &str,
+    node: &str,
+    content: StorageContent,
+    name: &str,
+    required: bool,
+) -> Html {
+    if remote.is_empty() || node.is_empty() {
+        return DisplayField::new()
+            .name(name.to_string())
+            .value(tr!("Select a remote and node first."))
+            .into();
+    }
+    PveStorageSelector::new(remote.to_string())
+        .key(format!("storage-{name}-{remote}-{node}"))
+        .name(name.to_string())
+        .node(AttrValue::from(node.to_string()))
+        .content_types(vec![content])
+        .required(required)
+        .into()
+}
+
+fn network_selector(remote: &str, node: &str) -> Html {
+    if remote.is_empty() || node.is_empty() {
+        return DisplayField::new()
+            .name("network-bridge")
+            .value(tr!("Select a remote and node first."))
+            .into();
+    }
+    PveNetworkSelector::new(remote.to_string())
+        .key(format!("network-{remote}-{node}"))
+        .name("network-bridge")
+        .node(AttrValue::from(node.to_string()))
+        .required(true)
         .into()
 }
 
@@ -1168,6 +1291,26 @@ fn guest_actions(link: &LoadableComponentScope<GuestPanelComp>, entry: &GuestEnt
                     }),
             )
             .tip(tr!("Migrate"))
+        }))
+        .with_optional_child((!template).then(|| {
+            let remote = remote.clone();
+            let node = node.clone();
+            Tooltip::new(
+                ActionIcon::new("fa fa-fw fa-terminal")
+                    .disabled(!live)
+                    .aria_label(tr!("Console"))
+                    .on_activate({
+                        let link = link.clone();
+                        move |_| {
+                            link.change_view(Some(ViewState::Console(
+                                remote.clone(),
+                                node.clone(),
+                                guest_info,
+                            )))
+                        }
+                    }),
+            )
+            .tip(tr!("Console"))
         }))
         .with_child(
             Tooltip::new(

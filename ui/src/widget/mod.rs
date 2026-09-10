@@ -13,6 +13,9 @@ pub use pve_network_selector::PveNetworkSelector;
 mod pve_storage_selector;
 pub use pve_storage_selector::PveStorageSelector;
 
+mod pve_media_selector;
+pub use pve_media_selector::PveMediaSelector;
+
 mod pve_migrate_mapping;
 pub use pve_migrate_mapping::PveMigrateMap;
 
