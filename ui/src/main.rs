@@ -10,7 +10,7 @@ use pwt::AsyncPool;
 use pwt::prelude::*;
 use pwt::props::RenderFn;
 use pwt::state::{Loader, PersistentState, SharedStateObserver};
-use pwt::widget::{Column, DesktopApp, Dialog, Mask};
+use pwt::widget::{Column, DesktopApp, Dialog};
 
 use pbs_api_types::TaskListItem;
 use proxmox_login::Authentication;
@@ -278,9 +278,7 @@ impl Component for DatacenterManagerApp {
                         .into()
                 } else {
                     Dialog::new(tr!("Proxmox Datacenter Manager Login"))
-                        .with_child(
-                            Mask::new(LoginPanel::new().on_login(on_login)).visible(loading),
-                        )
+                        .with_child(LoginPanel::new().on_login(on_login))
                         .into()
                 };
                 main_view
