@@ -64,6 +64,9 @@ impl PveMediaSelectorComp {
         node: AttrValue,
         content: MediaContentType,
     ) -> Result<Vec<PveStorageContent>, Error> {
+        if remote.is_empty() || node.is_empty() {
+            return Ok(Vec::new());
+        }
         let storage_content = match content {
             MediaContentType::Iso => StorageContent::Iso,
             MediaContentType::Vztmpl => StorageContent::Vztmpl,

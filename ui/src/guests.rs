@@ -890,7 +890,15 @@ fn create_qemu_input_panel(form_ctx: &FormContext) -> Html {
         )
         .with_large_field(
             tr!("Installation media"),
-            media_selector(&remote, &node, MediaContentType::Iso),
+            PveMediaSelector::new(
+                remote.clone(),
+                Some(AttrValue::from(node.clone())),
+                MediaContentType::Iso,
+            )
+            .key(format!("media-{remote}-{node}-iso"))
+            .name("media-selection")
+            .disabled(remote.is_empty() || node.is_empty())
+            .placeholder(tr!("Select existing media or use a download URL below")),
         )
         .with_large_field(
             tr!("Download media URL"),
@@ -898,7 +906,12 @@ fn create_qemu_input_panel(form_ctx: &FormContext) -> Html {
         )
         .with_field(
             tr!("Media storage"),
-            storage_selector(&remote, &node, StorageContent::Iso, "media-storage", false),
+            PveStorageSelector::new(remote.clone())
+                .key(format!("storage-media-{remote}-{node}"))
+                .name("media-storage")
+                .node(AttrValue::from(node.clone()))
+                .content_types(vec![StorageContent::Iso])
+                .disabled(remote.is_empty() || node.is_empty()),
         )
         .with_right_field(tr!("Media filename"), Field::new().name("media-filename"))
         .with_field(
@@ -911,13 +924,27 @@ fn create_qemu_input_panel(form_ctx: &FormContext) -> Html {
         .with_right_field(tr!("Checksum"), Field::new().name("media-checksum"))
         .with_field(
             tr!("System disk storage"),
-            storage_selector(&remote, &node, StorageContent::Images, "disk-storage", true),
+            PveStorageSelector::new(remote.clone())
+                .key(format!("storage-disk-{remote}-{node}"))
+                .name("disk-storage")
+                .node(AttrValue::from(node.clone()))
+                .content_types(vec![StorageContent::Images])
+                .disabled(remote.is_empty() || node.is_empty())
+                .required(true),
         )
         .with_right_field(
             tr!("Disk size (GiB)"),
             Number::new().name("disk-size").min(1u64).default(32u64),
         )
-        .with_large_field(tr!("Network bridge"), network_selector(&remote, &node))
+        .with_large_field(
+            tr!("Network bridge"),
+            PveNetworkSelector::new(remote.clone())
+                .key(format!("network-{remote}-{node}"))
+                .name("network-bridge")
+                .node(AttrValue::from(node.clone()))
+                .disabled(remote.is_empty() || node.is_empty())
+                .required(true),
+        )
         .with_large_field(tr!("Description"), Field::new().name("description"))
         .with_large_field(
             tr!("Start after creation"),
@@ -937,7 +964,15 @@ fn create_lxc_input_panel(form_ctx: &FormContext) -> Html {
         .with_field(tr!("Hostname"), Field::new().name("hostname"))
         .with_large_field(
             tr!("Template"),
-            media_selector(&remote, &node, MediaContentType::Vztmpl),
+            PveMediaSelector::new(
+                remote.clone(),
+                Some(AttrValue::from(node.clone())),
+                MediaContentType::Vztmpl,
+            )
+            .key(format!("media-{remote}-{node}-vztmpl"))
+            .name("media-selection")
+            .disabled(remote.is_empty() || node.is_empty())
+            .placeholder(tr!("Select existing template or use a download URL below")),
         )
         .with_large_field(
             tr!("Download template URL"),
@@ -945,13 +980,12 @@ fn create_lxc_input_panel(form_ctx: &FormContext) -> Html {
         )
         .with_field(
             tr!("Template storage"),
-            storage_selector(
-                &remote,
-                &node,
-                StorageContent::Vztmpl,
-                "media-storage",
-                false,
-            ),
+            PveStorageSelector::new(remote.clone())
+                .key(format!("storage-media-{remote}-{node}"))
+                .name("media-storage")
+                .node(AttrValue::from(node.clone()))
+                .content_types(vec![StorageContent::Vztmpl])
+                .disabled(remote.is_empty() || node.is_empty()),
         )
         .with_right_field(tr!("Template filename"), Field::new().name("media-filename"))
         .with_field(
@@ -972,13 +1006,27 @@ fn create_lxc_input_panel(form_ctx: &FormContext) -> Html {
         )
         .with_field(
             tr!("Root disk storage"),
-            storage_selector(&remote, &node, StorageContent::Rootdir, "disk-storage", true),
+            PveStorageSelector::new(remote.clone())
+                .key(format!("storage-disk-{remote}-{node}"))
+                .name("disk-storage")
+                .node(AttrValue::from(node.clone()))
+                .content_types(vec![StorageContent::Rootdir])
+                .disabled(remote.is_empty() || node.is_empty())
+                .required(true),
         )
         .with_right_field(
             tr!("Disk size (GiB)"),
             Number::new().name("disk-size").min(1u64).default(8u64),
         )
-        .with_large_field(tr!("Network bridge"), network_selector(&remote, &node))
+        .with_large_field(
+            tr!("Network bridge"),
+            PveNetworkSelector::new(remote.clone())
+                .key(format!("network-{remote}-{node}"))
+                .name("network-bridge")
+                .node(AttrValue::from(node.clone()))
+                .disabled(remote.is_empty() || node.is_empty())
+                .required(true),
+        )
         .with_large_field(tr!("SSH public keys"), Field::new().name("ssh-public-keys"))
         .with_large_field(tr!("Description"), Field::new().name("description"))
         .with_large_field(
@@ -989,57 +1037,6 @@ fn create_lxc_input_panel(form_ctx: &FormContext) -> Html {
             tr!("Start after creation"),
             Checkbox::new().name("start").default(false),
         )
-        .into()
-}
-
-fn media_selector(remote: &str, node: &str, content: MediaContentType) -> Html {
-    if remote.is_empty() || node.is_empty() {
-        return DisplayField::new()
-            .name("media-selection")
-            .value(tr!("Select a remote and node first."))
-            .into();
-    }
-    PveMediaSelector::new(remote.to_string(), Some(AttrValue::from(node.to_string())), content)
-        .key(format!("media-{remote}-{node}-{content}"))
-        .name("media-selection")
-        .placeholder(tr!("Select existing media or use a download URL below"))
-        .into()
-}
-
-fn storage_selector(
-    remote: &str,
-    node: &str,
-    content: StorageContent,
-    name: &str,
-    required: bool,
-) -> Html {
-    if remote.is_empty() || node.is_empty() {
-        return DisplayField::new()
-            .name(name.to_string())
-            .value(tr!("Select a remote and node first."))
-            .into();
-    }
-    PveStorageSelector::new(remote.to_string())
-        .key(format!("storage-{name}-{remote}-{node}"))
-        .name(name.to_string())
-        .node(AttrValue::from(node.to_string()))
-        .content_types(vec![content])
-        .required(required)
-        .into()
-}
-
-fn network_selector(remote: &str, node: &str) -> Html {
-    if remote.is_empty() || node.is_empty() {
-        return DisplayField::new()
-            .name("network-bridge")
-            .value(tr!("Select a remote and node first."))
-            .into();
-    }
-    PveNetworkSelector::new(remote.to_string())
-        .key(format!("network-{remote}-{node}"))
-        .name("network-bridge")
-        .node(AttrValue::from(node.to_string()))
-        .required(true)
         .into()
 }
 

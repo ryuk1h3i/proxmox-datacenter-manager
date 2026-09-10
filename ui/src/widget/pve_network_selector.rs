@@ -71,6 +71,9 @@ impl PveNetworkSelectorComp {
         node: AttrValue,
         ty: Option<ListNetworksType>,
     ) -> Result<Vec<NetworkInterface>, Error> {
+        if remote.is_empty() || node.is_empty() {
+            return Ok(Vec::new());
+        }
         let mut interfaces = crate::pdm_client()
             .pve_list_networks(&remote, &node, ty)
             .await?;

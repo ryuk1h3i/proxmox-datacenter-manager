@@ -87,6 +87,9 @@ impl PveStorageSelectorComp {
         content: Option<Vec<StorageContent>>,
         target: Option<AttrValue>,
     ) -> Result<Vec<StorageInfo>, Error> {
+        if remote.is_empty() || node.as_deref().unwrap_or_default().is_empty() {
+            return Ok(Vec::new());
+        }
         let filter = PveListStoragesFilter {
             content: content.unwrap_or_default(),
             enabled: Some(true),
