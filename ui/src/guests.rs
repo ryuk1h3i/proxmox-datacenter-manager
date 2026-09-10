@@ -877,7 +877,7 @@ fn target_fields(form_ctx: &FormContext, panel: InputPanel) -> InputPanel {
                     move |node: Option<AttrValue>| {
                         form_ctx
                             .write()
-                            .set_field_value("node", node.unwrap_or_default().into());
+                            .set_field_value("node", node.unwrap_or_default().to_string().into());
                     }
                 })
                 .required(true),
@@ -1068,7 +1068,7 @@ fn store_selector_value(
     Callback::from(move |value: Option<AttrValue>| {
         form_ctx
             .write()
-            .set_field_value(field, value.unwrap_or_default().into());
+            .set_field_value(field, value.unwrap_or_default().to_string().into());
     })
 }
 
