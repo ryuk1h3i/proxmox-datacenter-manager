@@ -7,7 +7,7 @@
 //! deep link into the originating remote's web UI. It is currently surfaced as a
 //! tab in the Remotes view.
 
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, HashMap, HashSet};
 use std::future::Future;
 use std::pin::Pin;
 use std::rc::Rc;
@@ -24,7 +24,7 @@ use proxmox_yew_comp::{
     LoadableComponentScope, LoadableComponentScopeExt, LoadableComponentState, rrd_value_renderer,
 };
 
-use pwt::css::{AlignItems, ColorScheme, FlexFit, JustifyContent};
+use pwt::css::{AlignItems, ColorScheme, FlexFit, JustifyContent, Overflow};
 use pwt::prelude::*;
 use pwt::props::{
     ContainerBuilder, CssPaddingBuilder, ExtractPrimaryKey, StorageLocation, WidgetBuilder,
@@ -61,6 +61,13 @@ use crate::{
 
 /// Auto-reload interval for the cross-remote resource list.
 const RELOAD_INTERVAL_MS: u32 = 10_000;
+
+/// Guest addresses need one API call per guest, so only a few are resolved per
+/// reload; the remaining ones are picked up by the following cycles.
+const MAX_PARALLEL_IP_LOOKUPS: usize = 8;
+
+/// Re-resolve cached guest addresses every n-th reload.
+const IP_REFRESH_LOADS: u32 = 30;
 
 /// How the guest list is presented.
 #[derive(Clone, Copy, PartialEq, Default, Serialize, Deserialize)]
@@ -99,6 +106,8 @@ impl From<GuestPanel> for VNode {
 struct GuestEntry {
     remote: String,
     resource: Resource,
+    /// Addresses resolved in the background, `None` while unknown.
+    ip: Option<String>,
 }
 
 impl GuestEntry {
@@ -229,6 +238,9 @@ pub enum Msg {
     Filter(String),
     SetViewMode(ViewMode),
     GuestAction(Action, Key),
+    /// Resolved addresses for the guest with the given global id, `None` if they
+    /// could not be determined (stopped guest, missing guest agent, ...).
+    IpLoaded(String, Option<Vec<String>>),
     /// Show the progress of a started task, deriving the task base URL from the
     /// UPID's own remote so concurrent actions on different remotes can't clobber it.
     ShowTask(RemoteUpid),
@@ -252,6 +264,13 @@ pub struct GuestPanelComp {
     remote_count: usize,
     /// Remotes that could not be queried, surfaced as a non-blocking banner.
     failed_remotes: Vec<String>,
+    /// Resolved guest addresses by global id. Guest IPs need one API call per
+    /// guest, so they are looked up in the background and cached across reloads.
+    ip_cache: HashMap<String, Option<String>>,
+    /// Lookups currently in flight, used to cap the number of parallel requests.
+    ip_pending: HashSet<String>,
+    /// Completed load cycles, used to periodically refresh the cached addresses.
+    load_count: u32,
 }
 
 pwt::impl_deref_mut_property!(GuestPanelComp, state, LoadableComponentState<ViewState>);
@@ -296,6 +315,71 @@ impl GuestPanelComp {
                 _ => true,
             });
     }
+
+    /// Start address lookups for running guests whose addresses are unknown or stale.
+    fn request_ips(
+        &mut self,
+        ctx: &LoadableComponentContext<Self>,
+        entries: &[GuestEntry],
+        refresh: bool,
+    ) {
+        for entry in entries {
+            if self.ip_pending.len() >= MAX_PARALLEL_IP_LOOKUPS {
+                return;
+            }
+            if entry.template() || entry.resource.status() != "running" {
+                continue;
+            }
+            let key = entry.resource.global_id().to_string();
+            if self.ip_pending.contains(&key) || (!refresh && self.ip_cache.contains_key(&key)) {
+                continue;
+            }
+            self.ip_pending.insert(key.clone());
+
+            let remote = entry.remote.clone();
+            let node = entry.node().to_string();
+            let vmid = entry.vmid();
+            let is_qemu = entry.guest_type() == GuestType::Qemu;
+            let link = ctx.link().clone();
+            ctx.link().spawn(async move {
+                let client = crate::pdm_client();
+                let res = if is_qemu {
+                    client
+                        .pve_qemu_ip_addresses(&remote, Some(&node), vmid)
+                        .await
+                } else {
+                    client.pve_lxc_ip_addresses(&remote, Some(&node), vmid).await
+                };
+                link.send_message(Msg::IpLoaded(key, res.ok()));
+            });
+        }
+    }
+
+    /// Copy the cached addresses into the currently displayed rows.
+    fn apply_ips(&mut self) {
+        let mut entries = self.store.read().data().to_vec();
+        let mut changed = false;
+        for entry in entries.iter_mut() {
+            let ip = self
+                .ip_cache
+                .get(entry.resource.global_id())
+                .cloned()
+                .flatten();
+            if entry.ip != ip {
+                entry.ip = ip;
+                changed = true;
+            }
+        }
+        if !changed {
+            return;
+        }
+        if *self.view_mode == ViewMode::Tree {
+            self.tree_store
+                .write()
+                .update_root_tree(build_guest_tree(&entries, false));
+        }
+        self.store.set_data(entries);
+    }
 }
 
 impl LoadableComponent for GuestPanelComp {
@@ -321,6 +405,9 @@ impl LoadableComponent for GuestPanelComp {
             tree_built: false,
             remote_count: 0,
             failed_remotes: Vec::new(),
+            ip_cache: HashMap::new(),
+            ip_pending: HashSet::new(),
+            load_count: 0,
         }
     }
 
@@ -328,6 +415,8 @@ impl LoadableComponent for GuestPanelComp {
         match msg {
             Msg::LoadFinished(remotes) => {
                 self.remote_count = remotes.len();
+                self.load_count = self.load_count.wrapping_add(1);
+                let refresh_ips = self.load_count % IP_REFRESH_LOADS == 0;
                 let mut entries = Vec::new();
                 let mut failed = Vec::new();
                 for remote_resources in remotes {
@@ -341,14 +430,23 @@ impl LoadableComponent for GuestPanelComp {
                     }
                     for resource in resources {
                         if matches!(resource, Resource::PveQemu(_) | Resource::PveLxc(_)) {
+                            // a stopped guest has no address, and its old one must not linger
+                            let ip = if resource.status() == "running" {
+                                self.ip_cache.get(resource.global_id()).cloned().flatten()
+                            } else {
+                                self.ip_cache.remove(resource.global_id());
+                                None
+                            };
                             entries.push(GuestEntry {
                                 remote: remote.clone(),
                                 resource,
+                                ip,
                             });
                         }
                     }
                 }
                 self.failed_remotes = failed;
+                self.request_ips(ctx, &entries, refresh_ips);
                 // only (re)build the tree when it is the active view; in flat mode
                 // the work would be discarded. The filter is preserved across
                 // set_data / update_root_tree, so it need not be reinstalled here.
@@ -360,6 +458,16 @@ impl LoadableComponent for GuestPanelComp {
                     self.tree_built = true;
                 }
                 self.store.set_data(entries);
+            }
+            Msg::IpLoaded(key, addresses) => {
+                self.ip_pending.remove(&key);
+                let text = addresses
+                    .and_then(|list| (!list.is_empty()).then(|| list.join(", ")));
+                self.ip_cache.insert(key, text);
+                // refresh the rows once the whole batch is done instead of on every answer
+                if self.ip_pending.is_empty() {
+                    self.apply_ips();
+                }
             }
             Msg::Filter(text) => {
                 self.filter = text;
@@ -847,6 +955,16 @@ async fn prepare_media(
     Ok(Some(format!("{storage}:{content}/{filename}")))
 }
 
+/// Shared shell for the guest creation forms: wide enough for two columns, but
+/// capped and scrollable so the dialog buttons stay on screen.
+fn create_input_panel() -> InputPanel {
+    InputPanel::new()
+        .padding(4)
+        .min_width(700)
+        .style("max-height", "70vh")
+        .class(Overflow::Auto)
+}
+
 fn target_fields(form_ctx: &FormContext, panel: InputPanel) -> InputPanel {
     let remote = form_ctx.read().get_field_text("remote");
     let node = form_ctx.read().get_field_text("node");
@@ -895,7 +1013,7 @@ fn target_fields(form_ctx: &FormContext, panel: InputPanel) -> InputPanel {
 fn create_qemu_input_panel(form_ctx: &FormContext) -> Html {
     let remote = form_ctx.read().get_field_text("remote");
     let node = form_ctx.read().get_field_text("node");
-    target_fields(form_ctx, InputPanel::new().padding(4).min_width(700))
+    target_fields(form_ctx, create_input_panel())
         .with_field(
             "VMID",
             Number::new().name("vmid").min(1u64).required(true),
@@ -980,7 +1098,7 @@ fn create_qemu_input_panel(form_ctx: &FormContext) -> Html {
 fn create_lxc_input_panel(form_ctx: &FormContext) -> Html {
     let remote = form_ctx.read().get_field_text("remote");
     let node = form_ctx.read().get_field_text("node");
-    target_fields(form_ctx, InputPanel::new().padding(4).min_width(700))
+    target_fields(form_ctx, create_input_panel())
         .with_field(
             "VMID",
             Number::new().name("vmid").min(1u64).required(true),
@@ -1145,6 +1263,10 @@ fn term_matches(entry: &GuestEntry, term: &SearchTerm) -> bool {
             .any(|t| t.to_lowercase().contains(value)),
         Some("remote") => entry.remote.to_lowercase().contains(value),
         Some("node") => entry.node().to_lowercase().contains(value),
+        Some("ip") => entry
+            .ip
+            .as_deref()
+            .is_some_and(|ip| ip.to_lowercase().contains(value)),
         Some("status") => entry.resource.status().to_lowercase().contains(value),
         Some("type") => entry
             .guest_type()
@@ -1162,6 +1284,10 @@ fn free_text_match(entry: &GuestEntry, text: &str) -> bool {
         || entry.resource.status().to_lowercase().contains(text)
         || entry.guest_type().to_string().contains(text)
         || entry.node().to_lowercase().contains(text)
+        || entry
+            .ip
+            .as_deref()
+            .is_some_and(|ip| ip.to_lowercase().contains(text))
         || entry
             .tags()
             .iter()
@@ -1201,6 +1327,13 @@ fn uptime_html(entry: &GuestEntry) -> Html {
         String::from("-").into()
     } else {
         format_duration_human(uptime as f64).into()
+    }
+}
+
+fn ip_html(entry: &GuestEntry) -> Html {
+    match &entry.ip {
+        Some(ip) => ip.clone().into(),
+        None => html! {},
     }
 }
 
@@ -1404,6 +1537,11 @@ fn flat_columns(
             .flex(1)
             .get_property(|entry: &GuestEntry| entry.node())
             .into(),
+        DataTableColumn::new(tr!("IP address"))
+            .flex(1)
+            .sorter(|a: &GuestEntry, b: &GuestEntry| a.ip.cmp(&b.ip))
+            .render(|entry: &GuestEntry| ip_html(entry))
+            .into(),
         DataTableColumn::new(tr!("Tags"))
             .flex(1)
             .render(|entry: &GuestEntry| render_guest_tags(entry.tags()).into())
@@ -1464,6 +1602,13 @@ fn tree_columns(
             .flex(1)
             .render(|node: &GuestTreeNode| match node {
                 GuestTreeNode::Guest(entry) => html! { {entry.node()} },
+                _ => html! {},
+            })
+            .into(),
+        DataTableColumn::new(tr!("IP address"))
+            .flex(1)
+            .render(|node: &GuestTreeNode| match node {
+                GuestTreeNode::Guest(entry) => ip_html(entry),
                 _ => html! {},
             })
             .into(),

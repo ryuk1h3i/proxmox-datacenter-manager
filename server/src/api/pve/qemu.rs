@@ -26,7 +26,8 @@ use crate::api::remotes::shell::TermTicketType;
 
 use super::{
     check_guest_delete_perms, check_guest_list_permissions, check_guest_permissions,
-    connect_to_remote, connect_to_remote_by_id, find_node_for_vm, new_remote_upid, raw_client_to_remote_by_id,
+    connect_to_remote, connect_to_remote_by_id, find_node_for_vm, new_remote_upid,
+    push_guest_ip_address, raw_client_to_remote_by_id,
 };
 
 pub const ROUTER: Router = Router::new()
@@ -48,6 +49,10 @@ const QEMU_VM_SUBDIRS: SubdirMap = &sorted!([
     ),
     ("clone", &Router::new().post(&API_METHOD_QEMU_CLONE)),
     ("pending", &Router::new().get(&API_METHOD_QEMU_GET_PENDING)),
+    (
+        "ip-addresses",
+        &Router::new().get(&API_METHOD_QEMU_IP_ADDRESSES)
+    ),
     ("firewall", &super::firewall::QEMU_FW_ROUTER),
     ("rrddata", &super::rrddata::QEMU_RRD_ROUTER),
     ("start", &Router::new().post(&API_METHOD_QEMU_START)),
@@ -288,6 +293,67 @@ pub async fn qemu_get_config(
     Ok(pve
         .qemu_get_config(&node, vmid, state.current(), snapshot)
         .await?)
+}
+
+#[api(
+    input: {
+        properties: {
+            remote: { schema: REMOTE_ID_SCHEMA },
+            node: {
+                schema: NODE_SCHEMA,
+                optional: true,
+            },
+            vmid: { schema: VMID_SCHEMA },
+        },
+    },
+    returns: {
+        description: "IP addresses reported by the guest agent.",
+        type: Array,
+        items: {
+            description: "An IP address.",
+            type: String,
+        },
+    },
+    access: {
+        permission: &Permission::Privilege(&["resource", "{remote}", "guest", "{vmid}"], PRIV_RESOURCE_AUDIT, false),
+    },
+)]
+/// Get the IP addresses of a VM. Requires a running guest agent.
+pub async fn qemu_ip_addresses(
+    remote: String,
+    node: Option<String>,
+    vmid: u32,
+) -> Result<Vec<String>, Error> {
+    let pve = connect_to_remote_by_id(&remote)?;
+    let node = find_node_for_vm(node, vmid, pve.as_ref()).await?;
+
+    let client = raw_client_to_remote_by_id(&remote)?;
+    let path = format!("/api2/extjs/nodes/{node}/qemu/{vmid}/agent/network-get-interfaces");
+    let response = client.get(&path).await?.expect_json::<Value>()?.data;
+
+    let mut addresses = Vec::new();
+    for interface in response
+        .get("result")
+        .and_then(Value::as_array)
+        .map(Vec::as_slice)
+        .unwrap_or_default()
+    {
+        if interface.get("name").and_then(Value::as_str) == Some("lo") {
+            continue;
+        }
+        for entry in interface
+            .get("ip-addresses")
+            .and_then(Value::as_array)
+            .map(Vec::as_slice)
+            .unwrap_or_default()
+        {
+            if let Some(address) = entry.get("ip-address").and_then(Value::as_str) {
+                push_guest_ip_address(&mut addresses, address);
+            }
+        }
+    }
+
+    Ok(addresses)
 }
 
 #[api(

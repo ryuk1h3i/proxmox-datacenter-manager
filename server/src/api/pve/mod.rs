@@ -142,6 +142,23 @@ pub fn raw_client_to_remote_by_id(id: &str) -> Result<Box<proxmox_client::Client
     connection::make_raw_client(get_remote(&remotes, id)?)
 }
 
+/// Add a guest IP address to `list`, dropping the netmask as well as loopback,
+/// link-local and duplicate addresses.
+pub(crate) fn push_guest_ip_address(list: &mut Vec<String>, address: &str) {
+    let address = address.split('/').next().unwrap_or(address).trim();
+    if address.is_empty()
+        || address == "::1"
+        || address.starts_with("127.")
+        || address.starts_with("169.254.")
+        || address.to_ascii_lowercase().starts_with("fe80")
+    {
+        return;
+    }
+    if !list.iter().any(|entry| entry == address) {
+        list.push(address.to_string());
+    }
+}
+
 #[api(
     returns: {
         type: Array,

@@ -146,6 +146,9 @@ impl Component for PveNodeResourcesComp {
             .gap(2)
             .padding(2)
             .class(ColorScheme::Neutral)
+            // the panel must not widen its dialog, long values are ellipsized instead
+            .style("min-width", "0")
+            .style("overflow", "hidden")
             .with_child(crate::renderer::render_title_row(
                 tr!("Node resources"),
                 "server",
@@ -187,7 +190,14 @@ impl Component for PveNodeResourcesComp {
                             cpu.sockets
                         )),
                 )
-                .with_child(Container::from_tag("span").with_child(cpu.model.clone())),
+                .with_child(
+                    Container::from_tag("span")
+                        .style("min-width", "0")
+                        .style("overflow", "hidden")
+                        .style("text-overflow", "ellipsis")
+                        .style("white-space", "nowrap")
+                        .with_child(cpu.model.clone()),
+                ),
         );
 
         let mem_total = status.memory.total.max(0) as u64;

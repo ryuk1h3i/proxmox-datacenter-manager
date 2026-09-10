@@ -704,10 +704,6 @@ const DEFAULT_DASHBOARD: &str = "
             {
               \"flex\": 3.0,
               \"widget-type\": \"pbs-datastores\"
-            },
-            {
-              \"flex\": 5.0,
-              \"widget-type\": \"subscription\"
             }
           ],
           [

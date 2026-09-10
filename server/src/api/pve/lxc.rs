@@ -25,7 +25,8 @@ use crate::api::remotes::shell::TermTicketType;
 
 use super::{
     check_guest_delete_perms, check_guest_list_permissions, check_guest_permissions,
-    connect_to_remote, connect_to_remote_by_id, new_remote_upid, raw_client_to_remote_by_id,
+    connect_to_remote, connect_to_remote_by_id, new_remote_upid, push_guest_ip_address,
+    raw_client_to_remote_by_id,
 };
 
 use super::find_node_for_vm;
@@ -49,6 +50,10 @@ const LXC_VM_SUBDIRS: SubdirMap = &sorted!([
     ),
     ("clone", &Router::new().post(&API_METHOD_LXC_CLONE)),
     ("pending", &Router::new().get(&API_METHOD_LXC_GET_PENDING)),
+    (
+        "ip-addresses",
+        &Router::new().get(&API_METHOD_LXC_IP_ADDRESSES)
+    ),
     ("firewall", &super::firewall::LXC_FW_ROUTER),
     ("rrddata", &super::rrddata::LXC_RRD_ROUTER),
     ("start", &Router::new().post(&API_METHOD_LXC_START)),
@@ -282,6 +287,61 @@ pub async fn lxc_get_config(
     Ok(pve
         .lxc_get_config(&node, vmid, state.current(), snapshot)
         .await?)
+}
+
+#[api(
+    input: {
+        properties: {
+            remote: { schema: REMOTE_ID_SCHEMA },
+            node: {
+                schema: NODE_SCHEMA,
+                optional: true,
+            },
+            vmid: { schema: VMID_SCHEMA },
+        },
+    },
+    returns: {
+        description: "IP addresses currently configured in the container.",
+        type: Array,
+        items: {
+            description: "An IP address.",
+            type: String,
+        },
+    },
+    access: {
+        permission: &Permission::Privilege(&["resource", "{remote}", "guest", "{vmid}"], PRIV_RESOURCE_AUDIT, false),
+    },
+)]
+/// Get the IP addresses of a running container. Only works while the container is running.
+pub async fn lxc_ip_addresses(
+    remote: String,
+    node: Option<String>,
+    vmid: u32,
+) -> Result<Vec<String>, Error> {
+    let pve = connect_to_remote_by_id(&remote)?;
+    let node = find_node_for_vm(node, vmid, pve.as_ref()).await?;
+
+    let client = raw_client_to_remote_by_id(&remote)?;
+    let path = format!("/api2/extjs/nodes/{node}/lxc/{vmid}/interfaces");
+    let interfaces = client.get(&path).await?.expect_json::<Value>()?.data;
+
+    let mut addresses = Vec::new();
+    for interface in interfaces
+        .as_array()
+        .map(Vec::as_slice)
+        .unwrap_or_default()
+    {
+        if interface.get("name").and_then(Value::as_str) == Some("lo") {
+            continue;
+        }
+        for key in ["inet", "inet6"] {
+            if let Some(address) = interface.get(key).and_then(Value::as_str) {
+                push_guest_ip_address(&mut addresses, address);
+            }
+        }
+    }
+
+    Ok(addresses)
 }
 
 #[api(

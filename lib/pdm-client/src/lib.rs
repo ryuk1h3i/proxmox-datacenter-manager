@@ -1047,6 +1047,36 @@ impl<T: HttpApiClient> PdmClient<T> {
         Ok(self.0.get(&path).await?.expect_json()?.data)
     }
 
+    /// IP addresses of a running container.
+    pub async fn pve_lxc_ip_addresses(
+        &self,
+        remote: &str,
+        node: Option<&str>,
+        vmid: u32,
+    ) -> Result<Vec<String>, Error> {
+        let path = ApiPathBuilder::new(format!(
+            "/api2/extjs/pve/remotes/{remote}/lxc/{vmid}/ip-addresses"
+        ))
+        .maybe_arg("node", &node)
+        .build();
+        Ok(self.0.get(&path).await?.expect_json()?.data)
+    }
+
+    /// IP addresses of a VM, as reported by its guest agent.
+    pub async fn pve_qemu_ip_addresses(
+        &self,
+        remote: &str,
+        node: Option<&str>,
+        vmid: u32,
+    ) -> Result<Vec<String>, Error> {
+        let path = ApiPathBuilder::new(format!(
+            "/api2/extjs/pve/remotes/{remote}/qemu/{vmid}/ip-addresses"
+        ))
+        .maybe_arg("node", &node)
+        .build();
+        Ok(self.0.get(&path).await?.expect_json()?.data)
+    }
+
     pub async fn pve_lxc_start(
         &self,
         remote: &str,
