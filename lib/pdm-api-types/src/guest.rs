@@ -1,4 +1,7 @@
+use std::collections::HashMap;
+
 use serde::{Deserialize, Serialize};
+use serde_json::Value;
 
 use proxmox_schema::api;
 
@@ -124,7 +127,9 @@ pub struct CreateLxc {
 }
 
 /// Commonly edited QEMU configuration properties.
-#[api]
+#[api(
+    additional_properties: "extra",
+)]
 #[derive(Clone, Debug, Deserialize, Serialize)]
 #[serde(rename_all = "kebab-case")]
 pub struct UpdateQemu {
@@ -170,10 +175,16 @@ pub struct UpdateQemu {
     /// Configuration digest used for optimistic locking.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub digest: Option<String>,
+
+    /// Any other native PVE property, forwarded to the remote verbatim.
+    #[serde(flatten)]
+    pub extra: HashMap<String, Value>,
 }
 
 /// Commonly edited LXC configuration properties.
-#[api]
+#[api(
+    additional_properties: "extra",
+)]
 #[derive(Clone, Debug, Deserialize, Serialize)]
 #[serde(rename_all = "kebab-case")]
 pub struct UpdateLxc {
@@ -213,6 +224,10 @@ pub struct UpdateLxc {
     /// Configuration digest used for optimistic locking.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub digest: Option<String>,
+
+    /// Any other native PVE property, forwarded to the remote verbatim.
+    #[serde(flatten)]
+    pub extra: HashMap<String, Value>,
 }
 
 /// Parameters for cloning a QEMU VM or template.

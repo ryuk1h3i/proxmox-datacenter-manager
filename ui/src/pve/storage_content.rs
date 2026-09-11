@@ -28,6 +28,7 @@ use pdm_api_types::media::{MediaContentType, PveDownloadUrl, PveStorageContent};
 use pdm_api_types::{HTTP_URL_SCHEMA, RemoteUpid};
 use pdm_client::types::StorageContent;
 
+use crate::pve::appliance_window::ApplianceWindow;
 use crate::pve::utils::filename_from_url;
 use crate::renderer::empty_state;
 
@@ -63,6 +64,8 @@ pub enum Msg {
 #[derive(PartialEq)]
 pub enum ViewState {
     Download(MediaContentType),
+    /// Browse the official Proxmox appliance index.
+    Appliances,
 }
 
 #[doc(hidden)]
@@ -226,6 +229,14 @@ impl LoadableComponent for StorageContentPanelComp {
                             Some(ViewState::Download(MediaContentType::Vztmpl))
                         })),
                 )
+                .with_child(
+                    Button::new(tr!("Official templates"))
+                        .icon_class("fa fa-list-alt")
+                        .disabled(!supports_vztmpl)
+                        .on_activate(
+                            link.change_view_callback(|_| Some(ViewState::Appliances)),
+                        ),
+                )
                 .with_flex_spacer()
                 .with_optional_child((supports_iso && supports_vztmpl).then(|| {
                     SegmentedButton::new()
@@ -292,6 +303,19 @@ impl LoadableComponent for StorageContentPanelComp {
     ) -> Option<Html> {
         match view_state {
             ViewState::Download(content) => Some(self.download_dialog(ctx, *content)),
+            ViewState::Appliances => {
+                let props = ctx.props();
+                Some(
+                    ApplianceWindow::dialog(
+                        props.remote.clone(),
+                        props.node.clone(),
+                        props.storage.clone(),
+                        ctx.link().callback(Msg::DownloadStarted),
+                    )
+                    .on_close(ctx.link().change_view_callback(|_| None))
+                    .into(),
+                )
+            }
         }
     }
 

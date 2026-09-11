@@ -78,6 +78,48 @@ pub struct PveDownloadUrl {
     pub verify_certificates: Option<bool>,
 }
 
+/// A container template offered by the official Proxmox appliance index.
+#[api]
+#[derive(Clone, Debug, Deserialize, PartialEq, Serialize)]
+#[serde(rename_all = "kebab-case")]
+pub struct PveApplianceInfo {
+    /// Template file name, e.g. `debian-12-standard_12.7-1_amd64.tar.zst`.
+    pub template: String,
+
+    /// Package name of the appliance.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub package: Option<String>,
+
+    /// Operating system the appliance is based on.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub os: Option<String>,
+
+    /// Appliance version.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub version: Option<String>,
+
+    /// One-line description.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub headline: Option<String>,
+
+    /// Index section, e.g. `system` or `turnkeylinux`.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub section: Option<String>,
+
+    /// Target architecture.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub architecture: Option<String>,
+}
+
+/// Parameters for downloading a template from the official appliance index.
+#[api]
+#[derive(Clone, Debug, Deserialize, Serialize)]
+#[serde(rename_all = "kebab-case")]
+pub struct PveDownloadAppliance {
+    /// Template file name as listed in the appliance index.
+    pub template: String,
+}
+
 /// URL-only catalog entry managed by PDM.
 #[api(
     properties: {

@@ -33,8 +33,8 @@ use pwt::props::{
 use pwt::state::{
     KeyedSlabTree, PersistentState, Selection, SharedState, SharedStateObserver, Store, TreeStore,
 };
-use pwt::widget::data_table::{DataTable, DataTableColumn, DataTableHeader};
-use pwt::widget::form::{Checkbox, DisplayField, Field, FormContext, Number};
+use pwt::widget::data_table::{DataTable, DataTableColumn, DataTableHeader, DataTableMouseEvent};
+use pwt::widget::form::{Checkbox, Combobox, DisplayField, Field, FormContext, Number};
 use pwt::widget::menu::{Menu, MenuButton, MenuItem};
 use pwt::widget::{
     ActionIcon, Button, Column, Container, Dialog, Fa, InputPanel, MessageBox, MessageBoxButtons,
@@ -239,6 +239,8 @@ pub enum ViewState {
     Migrate(String, String, GuestInfo),
     Snapshots(String, GuestInfo, String),
     Console(String, String, GuestInfo),
+    /// Show the full detail panel of the guest with the given key.
+    Detail(Key),
 }
 
 pub enum Msg {
@@ -371,8 +373,7 @@ impl GuestPanelComp {
         }
     }
 
-    /// Append placeholder rows for guests whose creation task has not produced a
-    /// real resource yet.
+    /// Merge the placeholder rows of guests whose creation task is still running.
     fn merge_pending(&self, entries: &mut Vec<GuestEntry>) {
         let Some(pending) = &self.pending else {
             return;
@@ -381,11 +382,21 @@ impl GuestPanelComp {
             .iter()
             .map(|entry| entry.resource.global_id().to_string())
             .collect();
+        pending.prune_seen(&known);
+
         for guest in pending.list() {
-            if known.contains(&guest.global_id()) {
-                continue;
+            let id = guest.global_id();
+            let creating = matches!(guest.state, PendingState::Creating);
+            match entries
+                .iter()
+                .position(|entry| entry.resource.global_id() == id)
+            {
+                // PVE publishes the guest before its creation task finishes, but
+                // without a name or a usable status, so the placeholder wins
+                Some(index) if creating => entries[index] = pending_entry(guest),
+                Some(_) => {}
+                None => entries.push(pending_entry(guest)),
             }
-            entries.push(pending_entry(guest));
         }
     }
 
@@ -562,6 +573,12 @@ impl LoadableComponent for GuestPanelComp {
                 let node = entry.node().to_string();
                 let vmid = entry.vmid();
                 let guest_type = entry.guest_type();
+                if matches!(action, Action::Delete) {
+                    // the guest is gone in a moment, its placeholder must not resurface
+                    if let Some(pending) = &self.pending {
+                        pending.forget(&remote, vmid);
+                    }
+                }
                 let link = ctx.link().clone();
                 ctx.link().spawn(async move {
                     let client = crate::pdm_client();
@@ -720,7 +737,7 @@ impl LoadableComponent for GuestPanelComp {
         )
     }
 
-    fn main_view(&self, _ctx: &LoadableComponentContext<Self>) -> Html {
+    fn main_view(&self, ctx: &LoadableComponentContext<Self>) -> Html {
         let total = self.store.data_len();
         let visible = self.store.filtered_data_len();
 
@@ -769,12 +786,42 @@ impl LoadableComponent for GuestPanelComp {
                     .striped(true)
                     .hover(true)
                     .class(FlexFit)
+                    .on_row_dblclick({
+                        let link = ctx.link().clone();
+                        let store = self.store.clone();
+                        move |event: &mut DataTableMouseEvent| {
+                            if store
+                                .read()
+                                .lookup_record(&event.record_key)
+                                .is_some_and(|entry| entry.pending.is_none())
+                            {
+                                link.change_view(Some(ViewState::Detail(
+                                    event.record_key.clone(),
+                                )));
+                            }
+                        }
+                    })
                     .into(),
                 ViewMode::Tree => {
                     DataTable::new(self.tree_columns.clone(), self.tree_store.clone())
                         .selection(self.selection.clone())
                         .hover(true)
                         .class(FlexFit)
+                        .on_row_dblclick({
+                            let link = ctx.link().clone();
+                            let store = self.store.clone();
+                            move |event: &mut DataTableMouseEvent| {
+                                if store
+                                    .read()
+                                    .lookup_record(&event.record_key)
+                                    .is_some_and(|entry| entry.pending.is_none())
+                                {
+                                    link.change_view(Some(ViewState::Detail(
+                                        event.record_key.clone(),
+                                    )));
+                                }
+                            }
+                        })
                         .into()
                 }
             };
@@ -880,6 +927,40 @@ impl LoadableComponent for GuestPanelComp {
                         .into(),
                 )
             }
+            ViewState::Detail(key) => {
+                let entry = self.store.read().lookup_record(key).cloned()?;
+                let panel: Html = match &entry.resource {
+                    Resource::PveQemu(qemu) => crate::pve::qemu::QemuPanel::new(
+                        entry.remote.clone(),
+                        qemu.node.clone(),
+                        qemu.clone(),
+                    )
+                    .router(false)
+                    .into(),
+                    Resource::PveLxc(lxc) => crate::pve::lxc::LxcPanel::new(
+                        entry.remote.clone(),
+                        lxc.node.clone(),
+                        lxc.clone(),
+                    )
+                    .router(false)
+                    .into(),
+                    _ => return None,
+                };
+                Some(
+                    Dialog::new(tr!(
+                        "{0} on {1}",
+                        render_resource_name(&entry.resource, true),
+                        entry.remote
+                    ))
+                    .min_width(1000)
+                    .min_height(680)
+                    .max_height("90vh")
+                    .resizable(true)
+                    .on_close(ctx.link().change_view_callback(|_| None))
+                    .with_child(panel)
+                    .into(),
+                )
+            }
         }
     }
 
@@ -980,8 +1061,7 @@ async fn create_lxc(
     }
     let bridge = form_ctx.read().get_field_text("network-bridge");
     if !bridge.is_empty() {
-        data["net0"] =
-            serde_json::Value::String(format!("name=eth0,bridge={bridge},ip=dhcp"));
+        data["net0"] = serde_json::Value::String(build_lxc_net0(&form_ctx, &bridge)?);
     }
     let config: CreateLxc = serde_json::from_value(data)?;
     let vmid = config.vmid;
@@ -1002,6 +1082,71 @@ async fn create_lxc(
     }
     link.send_reload();
     Ok(())
+}
+
+/// Assembles the PVE `net0` property string of a new container.
+fn build_lxc_net0(form_ctx: &FormContext, bridge: &str) -> Result<String, Error> {
+    let form = form_ctx.read();
+
+    let name = form.get_field_text("net-name");
+    let name = if name.is_empty() {
+        "eth0".to_string()
+    } else {
+        name
+    };
+    let mut parts = vec![format!("name={name}"), format!("bridge={bridge}")];
+
+    let vlan = form.get_field_text("net-vlan");
+    if !vlan.is_empty() {
+        parts.push(format!("tag={vlan}"));
+    }
+    let mtu = form.get_field_text("net-mtu");
+    if !mtu.is_empty() {
+        parts.push(format!("mtu={mtu}"));
+    }
+    if form.get_field_checked("net-firewall") {
+        parts.push("firewall=1".to_string());
+    }
+
+    match form.get_field_text("net-ipv4-mode").as_str() {
+        "static" => {
+            let address = form.get_field_text("net-ipv4");
+            if address.is_empty() {
+                anyhow::bail!(tr!(
+                    "A static IPv4 configuration needs an address in CIDR notation."
+                ));
+            }
+            parts.push(format!("ip={address}"));
+            let gateway = form.get_field_text("net-ipv4-gw");
+            if !gateway.is_empty() {
+                parts.push(format!("gw={gateway}"));
+            }
+        }
+        "none" => {}
+        // an unset selector keeps the DHCP default
+        _ => parts.push("ip=dhcp".to_string()),
+    }
+
+    match form.get_field_text("net-ipv6-mode").as_str() {
+        "static" => {
+            let address = form.get_field_text("net-ipv6");
+            if address.is_empty() {
+                anyhow::bail!(tr!(
+                    "A static IPv6 configuration needs an address in CIDR notation."
+                ));
+            }
+            parts.push(format!("ip6={address}"));
+            let gateway = form.get_field_text("net-ipv6-gw");
+            if !gateway.is_empty() {
+                parts.push(format!("gw6={gateway}"));
+            }
+        }
+        "dhcp" => parts.push("ip6=dhcp".to_string()),
+        "slaac" => parts.push("ip6=auto".to_string()),
+        _ => {}
+    }
+
+    Ok(parts.join(","))
 }
 
 /// Builds the placeholder row shown while a guest is being created.
@@ -1225,6 +1370,67 @@ fn create_lxc_input_panel(form_ctx: &FormContext) -> Html {
                 .on_change(store_selector_value(form_ctx, "network-bridge"))
                 .disabled(remote.is_empty() || node.is_empty())
                 .required(true),
+        )
+        .with_field(
+            tr!("Interface name"),
+            Field::new().name("net-name").placeholder("eth0"),
+        )
+        .with_right_field(
+            tr!("VLAN tag"),
+            Number::new()
+                .name("net-vlan")
+                .min(1u64)
+                .max(4094u64)
+                .placeholder(tr!("no VLAN")),
+        )
+        .with_field(
+            tr!("MTU"),
+            Number::new().name("net-mtu").min(576u64).placeholder(tr!("bridge default")),
+        )
+        .with_right_field(
+            tr!("Firewall"),
+            Checkbox::new().name("net-firewall").default(false),
+        )
+        .with_field(
+            tr!("IPv4"),
+            Combobox::new()
+                .name("net-ipv4-mode")
+                .editable(false)
+                .placeholder("dhcp")
+                .items(Rc::new(vec![
+                    "dhcp".into(),
+                    "static".into(),
+                    "none".into(),
+                ])),
+        )
+        .with_right_field(
+            tr!("IPv4 address (CIDR)"),
+            Field::new().name("net-ipv4").placeholder("192.0.2.10/24"),
+        )
+        .with_field(
+            tr!("IPv4 gateway"),
+            Field::new().name("net-ipv4-gw").placeholder("192.0.2.1"),
+        )
+        .with_right_field(
+            tr!("IPv6"),
+            Combobox::new()
+                .name("net-ipv6-mode")
+                .editable(false)
+                .placeholder("none")
+                .items(Rc::new(vec![
+                    "none".into(),
+                    "dhcp".into(),
+                    "slaac".into(),
+                    "static".into(),
+                ])),
+        )
+        .with_field(
+            tr!("IPv6 address (CIDR)"),
+            Field::new().name("net-ipv6").placeholder("2001:db8::10/64"),
+        )
+        .with_right_field(
+            tr!("IPv6 gateway"),
+            Field::new().name("net-ipv6-gw").placeholder("2001:db8::1"),
         )
         .with_large_field(tr!("SSH public keys"), Field::new().name("ssh-public-keys"))
         .with_large_field(tr!("Description"), Field::new().name("description"))

@@ -1,9 +1,11 @@
 use anyhow::Error;
 
+use proxmox_client::HttpApiClient;
 use proxmox_router::{Permission, Router, SubdirMap, list_subdirs_api_method};
 use proxmox_schema::api;
 use proxmox_sortable_macro::sortable;
 
+use pdm_api_types::media::PveApplianceInfo;
 use pdm_api_types::{NODE_SCHEMA, PRIV_RESOURCE_AUDIT, remotes::REMOTE_ID_SCHEMA};
 use pve_api_types::{NodeConfig, StorageContent};
 
@@ -15,6 +17,7 @@ pub const ROUTER: Router = Router::new()
 
 #[sortable]
 const SUBDIRS: SubdirMap = &sorted!([
+    ("aplinfo", &Router::new().get(&API_METHOD_LIST_APLINFO)),
     ("apt", &crate::api::remotes::updates::APT_ROUTER),
     ("config", &Router::new().get(&API_METHOD_GET_CONFIG)),
     ("firewall", &super::firewall::NODE_FW_ROUTER),
@@ -58,6 +61,32 @@ async fn get_config(remote: String, node: String) -> Result<NodeConfig, Error> {
 const STORAGE_ROUTER: Router = Router::new()
     .get(&API_METHOD_GET_STORAGES)
     .match_all("storage", &storage::ROUTER);
+
+#[api(
+    input: {
+        properties: {
+            remote: { schema: REMOTE_ID_SCHEMA },
+            node: { schema: NODE_SCHEMA },
+        },
+    },
+    returns: {
+        description: "Container templates offered by the official Proxmox appliance index.",
+        type: Array,
+        items: { type: PveApplianceInfo },
+    },
+    access: {
+        permission: &Permission::Privilege(&["resource", "{remote}", "node", "{node}"], PRIV_RESOURCE_AUDIT, false),
+    },
+)]
+/// List the container templates of the official Proxmox appliance index.
+async fn list_aplinfo(remote: String, node: String) -> Result<Vec<PveApplianceInfo>, Error> {
+    let (remotes, _) = pdm_config::remotes::config()?;
+    let remote_config = super::get_remote(&remotes, &remote)?;
+    let client = crate::connection::make_raw_client(remote_config)?;
+    let path = format!("/api2/extjs/nodes/{node}/aplinfo");
+
+    Ok(client.get(&path).await?.expect_json()?.data)
+}
 
 #[api(
     input: {

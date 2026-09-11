@@ -29,6 +29,7 @@ use pdm_api_types::{
 use crate::remotes::RemoteCertCheck;
 use crate::{LoadResult, extract_package_version, get_deep_url, get_remote};
 
+mod appliance_window;
 pub mod lxc;
 mod jobs;
 pub mod node;

@@ -4,6 +4,8 @@
 //! guest only shows up seconds after its creation task finished. Until then the
 //! guest lists render a placeholder row built from this state.
 
+use std::collections::HashSet;
+
 use gloo_timers::callback::Timeout;
 use wasm_bindgen_futures::spawn_local;
 use yew::Callback;
@@ -18,9 +20,8 @@ use crate::pve::GuestType;
 const POLL_INTERVAL_MS: u32 = 2_000;
 /// Give up on a task that never reports an exit status (~10 minutes).
 const MAX_POLLS: u32 = 300;
-/// How long a finished entry is kept, bridging the gap until the resource cache
-/// picks the new guest up.
-const DONE_LINGER_MS: u32 = 60_000;
+/// Fallback for a finished entry whose guest never shows up in the resource list.
+const DONE_LINGER_MS: u32 = 15_000;
 /// How long a failed creation stays visible.
 const FAILED_LINGER_MS: u32 = 20_000;
 
@@ -96,6 +97,23 @@ impl PendingGuests {
         self.state.read().to_vec()
     }
 
+    /// Drops finished placeholders whose guest has shown up in the resource list.
+    ///
+    /// `known` may cover a subset of the remotes; entries it does not mention are
+    /// left alone. Placeholders of still running tasks are always kept, as PVE
+    /// publishes the resource before the creation task is done.
+    pub fn prune_seen(&self, known: &HashSet<String>) {
+        fn is_stale(entry: &PendingGuest, known: &HashSet<String>) -> bool {
+            !matches!(entry.state, PendingState::Creating) && known.contains(&entry.global_id())
+        }
+        // only take the write lock (and notify) when something actually changes
+        if !self.state.read().iter().any(|entry| is_stale(entry, known)) {
+            return;
+        }
+        let mut list = self.state.write();
+        list.retain(|entry| !is_stale(entry, known));
+    }
+
     /// Register a started creation task and watch it until it finishes.
     pub fn add(&self, pending: PendingGuest) {
         let remote = pending.remote.clone();
@@ -111,6 +129,20 @@ impl PendingGuests {
     fn remove(&self, remote: &str, vmid: u32) {
         let mut list = self.state.write();
         list.retain(|entry| !(entry.remote == remote && entry.vmid == vmid));
+    }
+
+    /// Drop the placeholder of a guest that is known to exist, e.g. because it is
+    /// being deleted.
+    pub fn forget(&self, remote: &str, vmid: u32) {
+        if !self
+            .state
+            .read()
+            .iter()
+            .any(|entry| entry.remote == remote && entry.vmid == vmid)
+        {
+            return;
+        }
+        self.remove(remote, vmid);
     }
 
     fn set_state(&self, remote: &str, vmid: u32, state: PendingState) {

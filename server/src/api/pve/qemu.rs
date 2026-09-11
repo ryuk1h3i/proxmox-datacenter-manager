@@ -81,6 +81,8 @@ const QEMU_VM_SUBDIRS: SubdirMap = &sorted!([
         "remote-migrate",
         &Router::new().post(&API_METHOD_QEMU_REMOTE_MIGRATE)
     ),
+    ("move_disk", &Router::new().post(&API_METHOD_QEMU_MOVE_DISK)),
+    ("resize", &Router::new().put(&API_METHOD_QEMU_RESIZE_DISK)),
     (
         "termproxy",
         &Router::new().post(&API_METHOD_QEMU_SHELL_TICKET)
@@ -162,6 +164,161 @@ pub async fn qemu_update_config(
     let path = format!("/api2/extjs/nodes/{node}/qemu/{vmid}/config");
     client.put(&path, &config).await?.nodata()?;
     Ok(())
+}
+
+#[api(
+    input: {
+        properties: {
+            remote: { schema: REMOTE_ID_SCHEMA },
+            node: { schema: NODE_SCHEMA, optional: true },
+            vmid: { schema: VMID_SCHEMA },
+            disk: {
+                description: "The disk to resize, e.g. 'scsi0'.",
+                type: String,
+            },
+            size: {
+                description: "The new size, or a '+' prefixed increment.",
+                type: String,
+            },
+            digest: {
+                description: "Configuration digest used for optimistic locking.",
+                type: String,
+                optional: true,
+            },
+        },
+    },
+    returns: { type: RemoteUpid },
+    access: {
+        permission: &Permission::Privilege(&["resource", "{remote}", "guest", "{vmid}"], PRIV_RESOURCE_MANAGE, false),
+    },
+)]
+/// Resize a disk of a QEMU virtual machine.
+pub async fn qemu_resize_disk(
+    remote: String,
+    node: Option<String>,
+    vmid: u32,
+    disk: String,
+    size: String,
+    digest: Option<String>,
+) -> Result<RemoteUpid, Error> {
+    let pve = connect_to_remote_by_id(&remote)?;
+    let node = find_node_for_vm(node, vmid, pve.as_ref()).await?;
+    let client = raw_client_to_remote_by_id(&remote)?;
+    let path = format!("/api2/extjs/nodes/{node}/qemu/{vmid}/resize");
+    let mut params = serde_json::json!({ "disk": disk, "size": size });
+    if let Some(digest) = digest {
+        params["digest"] = digest.into();
+    }
+    let upid = client
+        .put(&path, &params)
+        .await?
+        .expect_json::<pve_api_types::PveUpid>()?
+        .data;
+
+    new_remote_upid(remote, upid).await
+}
+
+#[api(
+    input: {
+        properties: {
+            remote: { schema: REMOTE_ID_SCHEMA },
+            node: { schema: NODE_SCHEMA, optional: true },
+            vmid: { schema: VMID_SCHEMA },
+            disk: {
+                description: "The disk to move, e.g. 'scsi0'.",
+                type: String,
+            },
+            storage: {
+                description: "Target storage.",
+                type: String,
+                optional: true,
+            },
+            format: {
+                description: "Target disk format.",
+                type: String,
+                optional: true,
+            },
+            delete: {
+                description: "Delete the source disk after a successful copy.",
+                type: bool,
+                optional: true,
+            },
+            digest: {
+                description: "Configuration digest used for optimistic locking.",
+                type: String,
+                optional: true,
+            },
+            "target-vmid": {
+                schema: VMID_SCHEMA,
+                optional: true,
+            },
+            "target-disk": {
+                description: "The config key the disk gets in the target guest.",
+                type: String,
+                optional: true,
+            },
+            "target-digest": {
+                description: "Configuration digest of the target guest.",
+                type: String,
+                optional: true,
+            },
+            bwlimit: {
+                description: "Override the I/O bandwidth limit, in KiB/s.",
+                type: Integer,
+                optional: true,
+            },
+        },
+    },
+    returns: { type: RemoteUpid },
+    access: {
+        permission: &Permission::Privilege(&["resource", "{remote}", "guest", "{vmid}"], PRIV_RESOURCE_MANAGE, false),
+    },
+)]
+/// Move a disk of a QEMU virtual machine to another storage or guest.
+#[allow(clippy::too_many_arguments)]
+pub async fn qemu_move_disk(
+    remote: String,
+    node: Option<String>,
+    vmid: u32,
+    disk: String,
+    storage: Option<String>,
+    format: Option<String>,
+    delete: Option<bool>,
+    digest: Option<String>,
+    target_vmid: Option<u32>,
+    target_disk: Option<String>,
+    target_digest: Option<String>,
+    bwlimit: Option<i64>,
+) -> Result<RemoteUpid, Error> {
+    let pve = connect_to_remote_by_id(&remote)?;
+    let node = find_node_for_vm(node, vmid, pve.as_ref()).await?;
+    let client = raw_client_to_remote_by_id(&remote)?;
+    let path = format!("/api2/extjs/nodes/{node}/qemu/{vmid}/move_disk");
+
+    let mut params = serde_json::json!({ "disk": disk });
+    let optional: [(&str, Value); 8] = [
+        ("storage", storage.into()),
+        ("format", format.into()),
+        ("delete", delete.into()),
+        ("digest", digest.into()),
+        ("target-vmid", target_vmid.into()),
+        ("target-disk", target_disk.into()),
+        ("target-digest", target_digest.into()),
+        ("bwlimit", bwlimit.into()),
+    ];
+    for (key, value) in optional {
+        if !value.is_null() {
+            params[key] = value;
+        }
+    }
+
+    let upid = client
+        .post(&path, &params)
+        .await?
+        .expect_json::<pve_api_types::PveUpid>()?
+        .data;
+
+    new_remote_upid(remote, upid).await
 }
 
 #[api(

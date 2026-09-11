@@ -30,7 +30,7 @@ use pdm_api_types::{
     resource::{PveLxcResource, PveNodeResource, PveQemuResource, PveResource, PveStorageResource},
 };
 
-use crate::pending_guests::{PendingGuest, PendingGuests};
+use crate::pending_guests::{PendingGuest, PendingGuests, PendingState};
 use crate::{get_deep_url, renderer::render_tree_column, widget::MigrateWindow};
 
 use super::{
@@ -173,6 +173,19 @@ impl PveTreeComp {
         let mut tree = KeyedSlabTree::new();
         let mut root = tree.set_root(PveTreeNode::Root);
         let mut guest_ids = std::collections::HashSet::new();
+        // guests still being created are published by PVE without a name, so their
+        // placeholder replaces the real entry until the task is done
+        let creating: std::collections::HashSet<String> = match &self.pending {
+            Some(pending) => pending
+                .list()
+                .iter()
+                .filter(|guest| {
+                    guest.remote == remote && matches!(guest.state, PendingState::Creating)
+                })
+                .map(|guest| guest.global_id())
+                .collect(),
+            None => Default::default(),
+        };
         for entry in resources {
             match entry {
                 PveResource::Node(node_info) => {
@@ -186,6 +199,9 @@ impl PveTreeComp {
                 }
                 PveResource::Qemu(qemu_info) => {
                     guest_ids.insert(qemu_info.id.clone());
+                    if creating.contains(&qemu_info.id) {
+                        continue;
+                    }
                     let node_id = format!("remote/{}/node/{}", remote, qemu_info.node);
                     let key = Key::from(node_id.as_str());
                     let mut node = match root.find_node_by_key_mut(&key) {
@@ -200,6 +216,9 @@ impl PveTreeComp {
                 }
                 PveResource::Lxc(lxc_info) => {
                     guest_ids.insert(lxc_info.id.clone());
+                    if creating.contains(&lxc_info.id) {
+                        continue;
+                    }
                     let node_id = format!("remote/{}/node/{}", remote, lxc_info.node);
                     let key = Key::from(node_id.as_str());
                     let mut node = match root.find_node_by_key_mut(&key) {
@@ -229,8 +248,12 @@ impl PveTreeComp {
             }
         }
         if let Some(pending) = &self.pending {
+            pending.prune_seen(&guest_ids);
             for guest in pending.list() {
-                if guest.remote != remote || guest_ids.contains(&guest.global_id()) {
+                let is_creating = matches!(guest.state, PendingState::Creating);
+                if guest.remote != remote
+                    || (!is_creating && guest_ids.contains(&guest.global_id()))
+                {
                     continue;
                 }
                 let node_id = format!("remote/{}/node/{}", remote, guest.node);

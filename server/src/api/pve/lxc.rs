@@ -76,6 +76,13 @@ const LXC_VM_SUBDIRS: SubdirMap = &sorted!([
         "remote-migrate",
         &Router::new().post(&API_METHOD_LXC_REMOTE_MIGRATE)
     ),
+    // the web UI uses the same route name for both guest types
+    ("move_disk", &Router::new().post(&API_METHOD_LXC_MOVE_VOLUME)),
+    (
+        "move_volume",
+        &Router::new().post(&API_METHOD_LXC_MOVE_VOLUME)
+    ),
+    ("resize", &Router::new().put(&API_METHOD_LXC_RESIZE_DISK)),
     (
         "termproxy",
         &Router::new().post(&API_METHOD_LXC_SHELL_TICKET)
@@ -156,6 +163,165 @@ pub async fn lxc_update_config(
     let path = format!("/api2/extjs/nodes/{node}/lxc/{vmid}/config");
     client.put(&path, &config).await?.nodata()?;
     Ok(())
+}
+
+#[api(
+    input: {
+        properties: {
+            remote: { schema: REMOTE_ID_SCHEMA },
+            node: { schema: NODE_SCHEMA, optional: true },
+            vmid: { schema: VMID_SCHEMA },
+            disk: {
+                description: "The volume to resize, e.g. 'rootfs' or 'mp0'.",
+                type: String,
+            },
+            size: {
+                description: "The new size, or a '+' prefixed increment.",
+                type: String,
+            },
+            digest: {
+                description: "Configuration digest used for optimistic locking.",
+                type: String,
+                optional: true,
+            },
+        },
+    },
+    returns: { type: RemoteUpid },
+    access: {
+        permission: &Permission::Privilege(&["resource", "{remote}", "guest", "{vmid}"], PRIV_RESOURCE_MANAGE, false),
+    },
+)]
+/// Resize a volume of an LXC container.
+pub async fn lxc_resize_disk(
+    remote: String,
+    node: Option<String>,
+    vmid: u32,
+    disk: String,
+    size: String,
+    digest: Option<String>,
+) -> Result<RemoteUpid, Error> {
+    let pve = connect_to_remote_by_id(&remote)?;
+    let node = find_node_for_vm(node, vmid, pve.as_ref()).await?;
+    let client = raw_client_to_remote_by_id(&remote)?;
+    let path = format!("/api2/extjs/nodes/{node}/lxc/{vmid}/resize");
+    let mut params = serde_json::json!({ "disk": disk, "size": size });
+    if let Some(digest) = digest {
+        params["digest"] = digest.into();
+    }
+    let upid = client
+        .put(&path, &params)
+        .await?
+        .expect_json::<pve_api_types::PveUpid>()?
+        .data;
+
+    new_remote_upid(remote, upid).await
+}
+
+#[api(
+    input: {
+        properties: {
+            remote: { schema: REMOTE_ID_SCHEMA },
+            node: { schema: NODE_SCHEMA, optional: true },
+            vmid: { schema: VMID_SCHEMA },
+            volume: {
+                description: "The volume to move, e.g. 'rootfs' or 'mp0'.",
+                type: String,
+                optional: true,
+            },
+            disk: {
+                description: "Alias for 'volume', as sent by the web UI.",
+                type: String,
+                optional: true,
+            },
+            storage: {
+                description: "Target storage.",
+                type: String,
+                optional: true,
+            },
+            delete: {
+                description: "Delete the source volume after a successful copy.",
+                type: bool,
+                optional: true,
+            },
+            digest: {
+                description: "Configuration digest used for optimistic locking.",
+                type: String,
+                optional: true,
+            },
+            "target-vmid": {
+                schema: VMID_SCHEMA,
+                optional: true,
+            },
+            "target-volume": {
+                description: "The config key the volume gets in the target container.",
+                type: String,
+                optional: true,
+            },
+            "target-digest": {
+                description: "Configuration digest of the target container.",
+                type: String,
+                optional: true,
+            },
+            bwlimit: {
+                description: "Override the I/O bandwidth limit, in KiB/s.",
+                type: Integer,
+                optional: true,
+            },
+        },
+    },
+    returns: { type: RemoteUpid },
+    access: {
+        permission: &Permission::Privilege(&["resource", "{remote}", "guest", "{vmid}"], PRIV_RESOURCE_MANAGE, false),
+    },
+)]
+/// Move a volume of an LXC container to another storage or container.
+#[allow(clippy::too_many_arguments)]
+pub async fn lxc_move_volume(
+    remote: String,
+    node: Option<String>,
+    vmid: u32,
+    volume: Option<String>,
+    disk: Option<String>,
+    storage: Option<String>,
+    delete: Option<bool>,
+    digest: Option<String>,
+    target_vmid: Option<u32>,
+    target_volume: Option<String>,
+    target_digest: Option<String>,
+    bwlimit: Option<i64>,
+) -> Result<RemoteUpid, Error> {
+    let Some(volume) = volume.or(disk) else {
+        bail!("missing parameter: 'volume'");
+    };
+
+    let pve = connect_to_remote_by_id(&remote)?;
+    let node = find_node_for_vm(node, vmid, pve.as_ref()).await?;
+    let client = raw_client_to_remote_by_id(&remote)?;
+    let path = format!("/api2/extjs/nodes/{node}/lxc/{vmid}/move_volume");
+
+    let mut params = serde_json::json!({ "volume": volume });
+    let optional: [(&str, Value); 7] = [
+        ("storage", storage.into()),
+        ("delete", delete.into()),
+        ("digest", digest.into()),
+        ("target-vmid", target_vmid.into()),
+        ("target-volume", target_volume.into()),
+        ("target-digest", target_digest.into()),
+        ("bwlimit", bwlimit.into()),
+    ];
+    for (key, value) in optional {
+        if !value.is_null() {
+            params[key] = value;
+        }
+    }
+
+    let upid = client
+        .post(&path, &params)
+        .await?
+        .expect_json::<pve_api_types::PveUpid>()?
+        .data;
+
+    new_remote_upid(remote, upid).await
 }
 
 #[api(

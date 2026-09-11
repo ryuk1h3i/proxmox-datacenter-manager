@@ -32,6 +32,11 @@ pub struct QemuPanel {
     /// The nodes pve-manager version, used to feature gate some entries.
     pve_manager_version: Option<Version>,
 
+    #[prop_or(true)]
+    #[builder]
+    /// Sync the selected tab with the route; turn off when embedded in a dialog.
+    pub router: bool,
+
     #[prop_or(60_000)]
     /// The interval for refreshing the rrd data
     pub rrd_interval: u32,
@@ -68,7 +73,7 @@ impl yew::Component for QemuPanelComp {
             .into();
 
         TabPanel::new()
-            .router(true)
+            .router(props.router)
             .class(pwt::css::FlexFit)
             .title(title)
             .tool(
@@ -128,7 +133,7 @@ impl yew::Component for QemuPanelComp {
                                     .with_child(html! {<hr/>})
                                     .with_child(
                                         QemuHardwarePanel::new(node.clone(), vmid)
-                                            .readonly(true)
+                                            .readonly(false)
                                             .remote(remote.clone()),
                                     )
                                     .with_child(
@@ -138,7 +143,7 @@ impl yew::Component for QemuPanelComp {
                                     .with_child(
                                         QemuOptionsPanel::new(node.clone(), vmid)
                                             .pve_manager_version(pve_manager_version.clone())
-                                            .readonly(true)
+                                            .readonly(false)
                                             .remote(remote.clone()),
                                     ),
                             )

@@ -32,8 +32,8 @@ pub mod types {
 
     pub use pdm_api_types::guest::{CloneLxc, CloneQemu, CreateLxc, CreateQemu, UpdateLxc, UpdateQemu};
     pub use pdm_api_types::media::{
-        MediaCatalogEntry, MediaCatalogEntryUpdater, MediaContentType, PveDownloadUrl,
-        PveStorageContent,
+        MediaCatalogEntry, MediaCatalogEntryUpdater, MediaContentType, PveApplianceInfo,
+        PveDownloadAppliance, PveDownloadUrl, PveStorageContent,
     };
     pub use pdm_api_types::pve_jobs::{
         PveBackupJob, PveBackupJobConfig, PveReplicationJob, PveReplicationJobConfig,
@@ -2331,6 +2331,33 @@ impl<T: HttpApiClient> PdmClient<T> {
             .await?
             .expect_json()?
             .data)
+    }
+
+    /// List the container templates of the official Proxmox appliance index.
+    pub async fn pve_list_appliances(
+        &self,
+        remote: &str,
+        node: &str,
+    ) -> Result<Vec<PveApplianceInfo>, Error> {
+        let path = format!("/api2/extjs/pve/remotes/{remote}/nodes/{node}/aplinfo");
+        Ok(self.0.get(&path).await?.expect_json()?.data)
+    }
+
+    /// Download a template of the official appliance index into a PVE storage.
+    pub async fn pve_download_appliance(
+        &self,
+        remote: &str,
+        node: &str,
+        storage: &str,
+        template: &str,
+    ) -> Result<RemoteUpid, Error> {
+        let path =
+            format!("/api2/extjs/pve/remotes/{remote}/nodes/{node}/storage/{storage}/aplinfo");
+        let params = PveDownloadAppliance {
+            template: template.to_string(),
+        };
+
+        Ok(self.0.post(&path, &params).await?.expect_json()?.data)
     }
 
     pub async fn pve_storage_rrddata(
