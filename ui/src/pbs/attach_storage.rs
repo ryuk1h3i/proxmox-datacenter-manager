@@ -7,16 +7,28 @@ use yew::html::IntoEventCallback;
 use yew::virtual_dom::{Key, VComp, VNode};
 
 use pwt::AsyncPool;
-use pwt::css::FlexFit;
+use pwt::css::{AlignItems, FlexFit};
 use pwt::prelude::*;
 use pwt::props::{ContainerBuilder, ExtractPrimaryKey, WidgetBuilder};
 use pwt::state::{Selection, Store};
 use pwt::widget::data_table::{DataTable, DataTableColumn, DataTableHeader, MultiSelectMode};
-use pwt::widget::form::{Combobox, Field};
+use pwt::widget::form::Field;
 use pwt::widget::{Button, Column, Container, Dialog, Row, Toolbar, error_message};
 use pwt_macros::builder;
 
 use pdm_client::types::{PbsAttachResult, PbsPveStorageState};
+
+/// One datastore of the PBS remote.
+#[derive(Clone, PartialEq)]
+struct DatastoreRow {
+    name: String,
+}
+
+impl ExtractPrimaryKey for DatastoreRow {
+    fn extract_key(&self) -> Key {
+        Key::from(self.name.clone())
+    }
+}
 
 /// One row of the PVE remote table.
 #[derive(Clone, PartialEq)]
@@ -60,8 +72,9 @@ impl From<AttachPbsStorage> for VNode {
 }
 
 pub enum Msg {
+    LoadDatastores,
     DatastoresLoaded(Result<Vec<String>, String>),
-    SelectDatastore(String),
+    SelectDatastore,
     StateLoaded(Result<Vec<PbsPveStorageState>, String>),
     SetStorage(String),
     Apply,
@@ -70,8 +83,11 @@ pub enum Msg {
 }
 
 pub struct AttachPbsStorageComp {
-    datastores: Rc<Vec<AttrValue>>,
-    datastore: Option<String>,
+    datastores: Store<DatastoreRow>,
+    datastore_selection: Selection,
+    datastore_columns: Rc<Vec<DataTableHeader<DatastoreRow>>>,
+    /// Stays false until the datastore list came back, so an empty list can be reported.
+    datastores_loaded: bool,
     storage: String,
     store: Store<RemoteRow>,
     selection: Selection,
@@ -83,6 +99,25 @@ pub struct AttachPbsStorageComp {
 }
 
 impl AttachPbsStorageComp {
+    fn selected_datastore(&self) -> Option<String> {
+        self.datastore_selection
+            .selected_key()
+            .map(|key| key.to_string())
+    }
+
+    fn load_datastores(&self, ctx: &Context<Self>) {
+        let remote = ctx.props().remote.clone();
+        let link = ctx.link().clone();
+        self.async_pool.spawn(async move {
+            let result = crate::pdm_client()
+                .pbs_list_datastores(&remote)
+                .await
+                .map(|list| list.into_iter().map(|ds| ds.name).collect())
+                .map_err(|err| err.to_string());
+            link.send_message(Msg::DatastoresLoaded(result));
+        });
+    }
+
     fn load_state(&self, ctx: &Context<Self>, datastore: String) {
         let remote = ctx.props().remote.clone();
         let link = ctx.link().clone();
@@ -101,54 +136,62 @@ impl Component for AttachPbsStorageComp {
     type Properties = AttachPbsStorage;
 
     fn create(ctx: &Context<Self>) -> Self {
-        let async_pool = AsyncPool::new();
-        async_pool.spawn({
-            let remote = ctx.props().remote.clone();
+        let datastore_selection = Selection::new().on_select({
             let link = ctx.link().clone();
-            async move {
-                let result = crate::pdm_client()
-                    .pbs_list_datastores(&remote)
-                    .await
-                    .map(|list| list.into_iter().map(|ds| ds.name).collect())
-                    .map_err(|err| err.to_string());
-                link.send_message(Msg::DatastoresLoaded(result));
-            }
+            move |_| link.send_message(Msg::SelectDatastore)
         });
 
         let selection = Selection::new()
             .multiselect(true)
             .on_select(ctx.link().callback(|_| Msg::SelectionChange));
 
-        Self {
-            datastores: Rc::new(Vec::new()),
-            datastore: None,
+        let this = Self {
+            datastores: Store::with_extract_key(|row: &DatastoreRow| row.extract_key()),
+            datastore_selection,
+            datastore_columns: datastore_columns(),
+            datastores_loaded: false,
             storage: String::new(),
-            store: Store::new(),
+            store: Store::with_extract_key(|row: &RemoteRow| row.extract_key()),
             selection,
             columns: columns(),
             error: None,
             busy: false,
             done: false,
-            async_pool,
-        }
+            async_pool: AsyncPool::new(),
+        };
+
+        this.load_datastores(ctx);
+        this
     }
 
     fn update(&mut self, ctx: &Context<Self>, msg: Self::Message) -> bool {
         match msg {
-            Msg::DatastoresLoaded(Err(err)) => self.error = Some(err),
-            Msg::DatastoresLoaded(Ok(list)) => {
+            Msg::LoadDatastores => {
+                self.datastores_loaded = false;
                 self.error = None;
-                self.datastores = Rc::new(list.iter().map(|ds| AttrValue::from(ds.clone())).collect());
-                if let Some(first) = list.first() {
-                    ctx.link()
-                        .send_message(Msg::SelectDatastore(first.clone()));
+                self.load_datastores(ctx);
+            }
+            Msg::DatastoresLoaded(Err(err)) => {
+                self.datastores_loaded = true;
+                self.error = Some(err);
+            }
+            Msg::DatastoresLoaded(Ok(list)) => {
+                self.datastores_loaded = true;
+                self.error = None;
+                let first = list.first().cloned();
+                self.datastores
+                    .set_data(list.into_iter().map(|name| DatastoreRow { name }).collect());
+                if let Some(first) = first {
+                    self.datastore_selection.select(Key::from(first));
                 }
             }
-            Msg::SelectDatastore(datastore) => {
-                if self.storage.is_empty() || Some(&self.storage) == self.datastore.as_ref() {
+            Msg::SelectDatastore => {
+                let Some(datastore) = self.selected_datastore() else {
+                    return true;
+                };
+                if self.storage.is_empty() {
                     self.storage = datastore.clone();
                 }
-                self.datastore = Some(datastore.clone());
                 self.done = false;
                 self.load_state(ctx, datastore);
             }
@@ -170,7 +213,7 @@ impl Component for AttachPbsStorageComp {
             }
             Msg::SetStorage(value) => self.storage = value,
             Msg::Apply => {
-                let (Some(datastore), false) = (self.datastore.clone(), self.storage.is_empty())
+                let (Some(datastore), false) = (self.selected_datastore(), self.storage.is_empty())
                 else {
                     self.error = Some(tr!("Select a datastore and a storage ID first."));
                     return true;
@@ -194,12 +237,7 @@ impl Component for AttachPbsStorageComp {
                 let link = ctx.link().clone();
                 self.async_pool.spawn(async move {
                     let result = crate::pdm_client()
-                        .pbs_attach_storage_to_pve(
-                            &remote,
-                            &datastore,
-                            &storage,
-                            Some(&remotes),
-                        )
+                        .pbs_attach_storage_to_pve(&remote, &datastore, &storage, Some(&remotes))
                         .await
                         .map_err(|err| err.to_string());
                     link.send_message(Msg::Applied(result));
@@ -231,6 +269,19 @@ impl Component for AttachPbsStorageComp {
     fn view(&self, ctx: &Context<Self>) -> Html {
         let props = ctx.props();
         let link = ctx.link();
+        let remote = props.remote.clone();
+
+        let hint = if !self.datastores_loaded {
+            tr!("Loading the datastores of '{0}'...", remote)
+        } else if self.datastores.data_len() == 0 {
+            tr!(
+                "'{0}' did not report any datastore, check that its API token has the \
+                 'Datastore.Audit' privilege.",
+                remote
+            )
+        } else {
+            tr!("Datastores on '{0}'", remote)
+        };
 
         let mut column = Column::new().class(FlexFit).padding(2).gap(2);
 
@@ -242,24 +293,27 @@ impl Component for AttachPbsStorageComp {
             .with_child(
                 Row::new()
                     .gap(2)
+                    .class(AlignItems::Center)
+                    .with_child(Container::new().with_child(hint))
+                    .with_flex_spacer()
                     .with_child(
-                        Container::new()
-                            .with_child(tr!("Datastore"))
-                            .padding_end(1),
-                    )
-                    .with_child(
-                        Combobox::new()
-                            .editable(false)
-                            .items(self.datastores.clone())
-                            .value(self.datastore.clone().map(AttrValue::from))
-                            .on_change(link.callback(Msg::SelectDatastore)),
-                    )
-                    .with_child(
-                        Container::new()
-                            .with_child(tr!("Storage ID"))
-                            .padding_start(2)
-                            .padding_end(1),
-                    )
+                        Button::refresh(!self.datastores_loaded).on_activate({
+                            let link = ctx.link().clone();
+                            move |_| link.send_message(Msg::LoadDatastores)
+                        }),
+                    ),
+            )
+            .with_child(
+                DataTable::new(self.datastore_columns.clone(), self.datastores.clone())
+                    .selection(self.datastore_selection.clone())
+                    .border(true)
+                    .class(FlexFit),
+            )
+            .with_child(
+                Row::new()
+                    .gap(2)
+                    .class(AlignItems::Center)
+                    .with_child(Container::new().with_child(tr!("Storage ID on the PVE remotes")))
                     .with_child(
                         Field::new()
                             .value(self.storage.clone())
@@ -282,7 +336,7 @@ impl Component for AttachPbsStorageComp {
         Dialog::new(tr!("Add backup storage to PVE remotes"))
             .resizable(true)
             .width(760)
-            .height(520)
+            .height(640)
             .on_close(props.on_close.clone())
             .with_child(column)
             .with_child(
@@ -302,7 +356,7 @@ impl Component for AttachPbsStorageComp {
                     )
                     .with_child(
                         Button::new(tr!("Apply"))
-                            .disabled(self.busy || self.datastore.is_none())
+                            .disabled(self.busy || self.selected_datastore().is_none())
                             .on_activate({
                                 let link = ctx.link().clone();
                                 move |_| link.send_message(Msg::Apply)
@@ -311,6 +365,15 @@ impl Component for AttachPbsStorageComp {
             )
             .into()
     }
+}
+
+fn datastore_columns() -> Rc<Vec<DataTableHeader<DatastoreRow>>> {
+    Rc::new(vec![
+        DataTableColumn::new(tr!("Datastore"))
+            .flex(1)
+            .get_property(|row: &DatastoreRow| row.name.as_str())
+            .into(),
+    ])
 }
 
 fn columns() -> Rc<Vec<DataTableHeader<RemoteRow>>> {
