@@ -128,6 +128,7 @@ pub struct CreateLxc {
 
 /// Commonly edited QEMU configuration properties.
 #[api(
+    properties: {},
     additional_properties: "extra",
 )]
 #[derive(Clone, Debug, Deserialize, Serialize)]
@@ -183,6 +184,7 @@ pub struct UpdateQemu {
 
 /// Commonly edited LXC configuration properties.
 #[api(
+    properties: {},
     additional_properties: "extra",
 )]
 #[derive(Clone, Debug, Deserialize, Serialize)]
