@@ -4,6 +4,7 @@ pub mod acl;
 pub mod api;
 pub mod api_cache;
 pub mod auth;
+pub mod backup_jobs;
 pub mod ceph;
 pub mod context;
 pub mod env;

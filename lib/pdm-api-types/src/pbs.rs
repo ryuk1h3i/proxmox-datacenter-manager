@@ -55,3 +55,43 @@ impl TaskStatus {
         self.status == IsRunning::Running
     }
 }
+
+#[api(
+    properties: {
+        remote: { schema: crate::remotes::REMOTE_ID_SCHEMA },
+        storage: { schema: crate::PVE_STORAGE_ID_SCHEMA, optional: true },
+    },
+)]
+/// Whether a PVE remote already has a storage pointing at a PBS datastore.
+#[derive(Clone, Debug, Deserialize, Serialize, PartialEq)]
+#[serde(rename_all = "kebab-case")]
+pub struct PbsPveStorageState {
+    /// The PVE remote.
+    pub remote: String,
+    /// ID of the storage pointing at the datastore, if there is one.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub storage: Option<String>,
+    /// Error encountered while querying the remote.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub error: Option<String>,
+}
+
+#[api(
+    properties: {
+        remote: { schema: crate::remotes::REMOTE_ID_SCHEMA },
+    },
+)]
+/// Outcome of attaching a PBS datastore to a single PVE remote.
+#[derive(Clone, Debug, Deserialize, Serialize, PartialEq)]
+#[serde(rename_all = "kebab-case")]
+pub struct PbsAttachResult {
+    /// The PVE remote.
+    pub remote: String,
+    /// Whether the storage was created or updated.
+    pub changed: bool,
+    /// Human readable outcome.
+    pub message: String,
+    /// Error encountered while configuring the remote.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub error: Option<String>,
+}

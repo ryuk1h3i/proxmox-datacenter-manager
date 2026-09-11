@@ -1107,6 +1107,66 @@ pub fn get_cached_resources_blocking(
     Ok(resources)
 }
 
+/// A PVE guest as seen by the resource cache.
+pub struct CachedGuest {
+    pub remote: String,
+    pub vmid: u32,
+    pub node: String,
+    pub name: String,
+    pub pool: String,
+    pub tags: Vec<String>,
+    pub template: bool,
+}
+
+/// Collect the PVE guests of every PVE remote from the resource cache.
+///
+/// Remotes that cannot be reached are skipped instead of failing the whole call.
+pub async fn cached_pve_guests(max_age: u64) -> Result<Vec<CachedGuest>, Error> {
+    let (remotes_config, _) = pdm_config::remotes::config()?;
+
+    let mut guests = Vec::new();
+    for (_, remote) in remotes_config {
+        if remote.ty != RemoteType::Pve {
+            continue;
+        }
+        let remote_name = remote.id.clone();
+        let resources = match get_resources_for_remote(&remote, max_age).await {
+            Ok(resources) => resources,
+            Err(err) => {
+                log::warn!("could not list guests of remote '{remote_name}': {err:#}");
+                continue;
+            }
+        };
+
+        for resource in resources {
+            let guest = match resource {
+                Resource::PveQemu(r) => CachedGuest {
+                    remote: remote_name.clone(),
+                    vmid: r.vmid,
+                    node: r.node,
+                    name: r.name,
+                    pool: r.pool,
+                    tags: r.tags,
+                    template: r.template,
+                },
+                Resource::PveLxc(r) => CachedGuest {
+                    remote: remote_name.clone(),
+                    vmid: r.vmid,
+                    node: r.node,
+                    name: r.name,
+                    pool: r.pool,
+                    tags: r.tags,
+                    template: r.template,
+                },
+                _ => continue,
+            };
+            guests.push(guest);
+        }
+    }
+
+    Ok(guests)
+}
+
 /// Update cached resource data.
 ///
 /// If the cache already contains more recent data, this function returns the already

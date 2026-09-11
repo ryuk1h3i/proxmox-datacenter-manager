@@ -35,6 +35,11 @@ pub mod types {
         MediaCatalogEntry, MediaCatalogEntryUpdater, MediaContentType, PveApplianceInfo,
         PveDownloadAppliance, PveDownloadUrl, PveStorageContent,
     };
+    pub use pdm_api_types::backup_jobs::{
+        BackupJobConfig, BackupJobConfigUpdater, BackupJobGuest, BackupJobRemoteStatus,
+        BackupJobSyncState, BackupJobTarget,
+    };
+    pub use pdm_api_types::pbs::{PbsAttachResult, PbsPveStorageState};
     pub use pdm_api_types::pve_jobs::{
         PveBackupJob, PveBackupJobConfig, PveReplicationJob, PveReplicationJobConfig,
         PveReplicationStatus, PveVzdumpRequest,
@@ -2060,6 +2065,110 @@ impl<T: HttpApiClient> PdmClient<T> {
         Ok(self
             .0
             .post(&path, &json!({}))
+            .await?
+            .expect_json()?
+            .data)
+    }
+
+    /// List the unified, cross-remote backup jobs.
+    pub async fn list_backup_jobs(&self) -> Result<Vec<BackupJobConfig>, Error> {
+        Ok(self
+            .0
+            .get("/api2/extjs/backup-jobs")
+            .await?
+            .expect_json()?
+            .data)
+    }
+
+    /// Read one unified backup job.
+    pub async fn read_backup_job(&self, id: &str) -> Result<BackupJobConfig, Error> {
+        let path = format!("/api2/extjs/backup-jobs/{id}/config");
+        Ok(self.0.get(&path).await?.expect_json()?.data)
+    }
+
+    /// Create a unified backup job.
+    pub async fn create_backup_job(&self, job: &BackupJobConfig) -> Result<(), Error> {
+        self.0.post("/api2/extjs/backup-jobs", job).await?.nodata()?;
+        Ok(())
+    }
+
+    /// Update a unified backup job.
+    pub async fn update_backup_job(
+        &self,
+        id: &str,
+        update: &BackupJobConfigUpdater,
+    ) -> Result<(), Error> {
+        let path = format!("/api2/extjs/backup-jobs/{id}");
+        self.0.put(&path, update).await?.nodata()?;
+        Ok(())
+    }
+
+    /// Delete a unified backup job, also removing it from the remotes.
+    pub async fn delete_backup_job(&self, id: &str) -> Result<(), Error> {
+        let path = format!("/api2/extjs/backup-jobs/{id}");
+        self.0.delete(&path).await?.nodata()?;
+        Ok(())
+    }
+
+    /// Report how a unified backup job is materialized on the remotes.
+    pub async fn backup_job_status(&self, id: &str) -> Result<Vec<BackupJobRemoteStatus>, Error> {
+        let path = format!("/api2/extjs/backup-jobs/{id}/status");
+        Ok(self.0.get(&path).await?.expect_json()?.data)
+    }
+
+    /// Force a re-materialization of a unified backup job.
+    pub async fn sync_backup_job(&self, id: &str) -> Result<Vec<BackupJobRemoteStatus>, Error> {
+        let path = format!("/api2/extjs/backup-jobs/{id}/sync");
+        Ok(self
+            .0
+            .post(&path, &json!({}))
+            .await?
+            .expect_json()?
+            .data)
+    }
+
+    /// Start an immediate run of a unified backup job.
+    pub async fn run_backup_job(&self, id: &str) -> Result<Vec<RemoteUpid>, Error> {
+        let path = format!("/api2/extjs/backup-jobs/{id}/run");
+        Ok(self
+            .0
+            .post(&path, &json!({}))
+            .await?
+            .expect_json()?
+            .data)
+    }
+
+    /// Check which PVE remotes already have a storage for a PBS datastore.
+    pub async fn pbs_pve_storage_state(
+        &self,
+        remote: &str,
+        datastore: &str,
+    ) -> Result<Vec<PbsPveStorageState>, Error> {
+        let path = ApiPathBuilder::new(format!("/api2/extjs/pbs/remotes/{remote}/pve-storage"))
+            .arg("datastore", datastore)
+            .build();
+        Ok(self.0.get(&path).await?.expect_json()?.data)
+    }
+
+    /// Configure a PBS datastore as a storage on the given PVE remotes.
+    pub async fn pbs_attach_storage_to_pve(
+        &self,
+        remote: &str,
+        datastore: &str,
+        storage: &str,
+        pve_remotes: Option<&[String]>,
+    ) -> Result<Vec<PbsAttachResult>, Error> {
+        let path = format!("/api2/extjs/pbs/remotes/{remote}/pve-storage");
+        let mut request = json!({
+            "datastore": datastore,
+            "storage": storage,
+        });
+        if let Some(pve_remotes) = pve_remotes {
+            request["pve-remotes"] = pve_remotes.into();
+        }
+        Ok(self
+            .0
+            .post(&path, &request)
             .await?
             .expect_json()?
             .data)

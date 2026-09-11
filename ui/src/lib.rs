@@ -34,6 +34,8 @@ pub use pending_guests::{PendingGuest, PendingGuests, PendingState};
 
 mod dashboard;
 
+mod backup;
+
 mod guests;
 
 use wasm_bindgen::JsValue;

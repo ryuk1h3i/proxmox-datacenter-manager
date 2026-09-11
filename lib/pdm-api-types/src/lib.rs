@@ -15,6 +15,7 @@ use proxmox_time::parse_daily_duration;
 mod acl;
 pub use acl::*;
 
+pub mod backup_jobs;
 pub mod pbs;
 pub mod pbs_jobs;
 pub mod pve_jobs;

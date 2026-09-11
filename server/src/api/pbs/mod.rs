@@ -23,6 +23,7 @@ use crate::remote_tasks;
 mod node;
 mod maintenance;
 mod rrddata;
+mod storage_sync;
 pub mod tasks;
 
 pub const ROUTER: Router = Router::new()
@@ -54,6 +55,7 @@ const NODES_ROUTER: Router = Router::new().match_all("node", &node::ROUTER);
 const REMOTE_SUBDIRS: SubdirMap = &sorted!([
     ("nodes", &NODES_ROUTER),
     ("prune-jobs", &maintenance::PRUNE_JOBS_ROUTER),
+    ("pve-storage", &storage_sync::ROUTER),
     ("sync-jobs", &maintenance::SYNC_JOBS_ROUTER),
     ("verify-jobs", &maintenance::VERIFY_JOBS_ROUTER),
     ("status", &Router::new().get(&API_METHOD_GET_STATUS)),

@@ -107,10 +107,13 @@ pub enum ViewState {
     Edit,
     Remove,
     CheckCertificate,
+    AttachPbsStorage(String),
 }
 
 pub enum Msg {
     RemoveItem(bool),
+    PbsAdded(String),
+    WizardClosed,
 }
 
 pub struct PbsRemoteConfigPanel {
@@ -118,6 +121,9 @@ pub struct PbsRemoteConfigPanel {
     store: Store<Remote>,
     selection: Selection,
     remote_list_columns: Rc<Vec<DataTableHeader<Remote>>>,
+    /// Set once a PBS remote was added, so the storage dialog can be offered
+    /// after the wizard closed itself.
+    pending_pbs_attach: Option<String>,
 }
 
 pwt::impl_deref_mut_property!(
@@ -158,6 +164,7 @@ impl LoadableComponent for PbsRemoteConfigPanel {
             store,
             selection,
             remote_list_columns,
+            pending_pbs_attach: None,
         }
     }
 
@@ -175,6 +182,20 @@ impl LoadableComponent for PbsRemoteConfigPanel {
                 }
                 false
             }
+            Msg::PbsAdded(id) => {
+                self.pending_pbs_attach = Some(id);
+                false
+            }
+            Msg::WizardClosed => {
+                match self.pending_pbs_attach.take() {
+                    Some(id) => ctx
+                        .link()
+                        .change_view(Some(ViewState::AttachPbsStorage(id))),
+                    None => ctx.link().change_view(None),
+                }
+                ctx.link().send_reload();
+                false
+            }
         }
     }
 
@@ -182,6 +203,14 @@ impl LoadableComponent for PbsRemoteConfigPanel {
         let link = ctx.link();
 
         let disabled = self.selection.is_empty();
+
+        let selected_pbs = self.selection.selected_key().and_then(|key| {
+            self.store
+                .read()
+                .lookup_record(&key)
+                .filter(|remote| remote.ty == RemoteType::Pbs)
+                .map(|remote| remote.id.clone())
+        });
 
         let toolbar = Toolbar::new()
             .class("pwt-overflow-hidden")
@@ -220,6 +249,15 @@ impl LoadableComponent for PbsRemoteConfigPanel {
                 Button::new(tr!("Check Certificate"))
                     .disabled(disabled)
                     .on_activate(link.change_view_callback(|_| Some(ViewState::CheckCertificate))),
+            )
+            .with_child(
+                Button::new(tr!("Add Storage to PVE"))
+                    .disabled(selected_pbs.is_none())
+                    .on_activate(link.change_view_callback(move |_| {
+                        selected_pbs
+                            .clone()
+                            .map(ViewState::AttachPbsStorage)
+                    })),
             )
             .with_flex_spacer()
             .with_child({
@@ -266,6 +304,11 @@ impl LoadableComponent for PbsRemoteConfigPanel {
                             .into()
                     })
             }),
+            ViewState::AttachPbsStorage(remote) => Some(
+                crate::pbs::AttachPbsStorage::new(remote.clone())
+                    .on_close(ctx.link().change_view_callback(|_| None))
+                    .into(),
+            ),
         }
     }
 }
@@ -309,16 +352,26 @@ impl PbsRemoteConfigPanel {
         ctx: &LoadableComponentContext<Self>,
         remote_type: RemoteType,
     ) -> Html {
+        let submit_link = ctx.link().clone();
         super::AddWizard::new(remote_type)
-            .on_close(ctx.link().change_view_callback(|_| None))
-            .on_submit(move |ctx| create_remote(ctx, remote_type))
+            .on_close(ctx.link().callback(|_| Msg::WizardClosed))
+            .on_submit(move |data: Value| {
+                let link = submit_link.clone();
+                async move {
+                    let id = data
+                        .get("id")
+                        .and_then(|id| id.as_str())
+                        .map(|id| id.to_string());
+                    create_remote(data, remote_type).await?;
+                    if remote_type == RemoteType::Pbs {
+                        if let Some(id) = id {
+                            link.send_message(Msg::PbsAdded(id));
+                        }
+                    }
+                    Ok(())
+                }
+            })
             .into()
-
-        // EditWindow::new(tr!("Add") + ": " + &tr!("Remote"))
-        //     .renderer(add_remote_input_panel)
-        //     .on_submit(move |ctx: FormContext| create_item(ctx.get_submit_data(), remote_type))
-        //     .on_done(ctx.link().change_view_callback(|_| None))
-        //     .into()
     }
 
     fn create_edit_dialog(&self, ctx: &LoadableComponentContext<Self>, key: Key) -> Html {

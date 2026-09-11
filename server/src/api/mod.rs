@@ -10,6 +10,7 @@ use proxmox_sortable_macro::sortable;
 
 pub mod access;
 pub mod auto_installer;
+pub mod backup_jobs;
 pub mod ceph;
 pub mod config;
 pub mod nodes;
@@ -25,6 +26,7 @@ pub mod subscriptions;
 const SUBDIRS: SubdirMap = &sorted!([
     ("access", &access::ROUTER),
     ("auto-install", &auto_installer::ROUTER),
+    ("backup-jobs", &backup_jobs::ROUTER),
     ("ceph", &ceph::ROUTER),
     ("config", &config::ROUTER),
     ("ping", &Router::new().get(&API_METHOD_PING)),

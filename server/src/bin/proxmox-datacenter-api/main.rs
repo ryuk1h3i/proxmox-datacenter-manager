@@ -342,6 +342,7 @@ async fn run(debug: bool) -> Result<(), Error> {
     tasks::remote_tasks::start_task()?;
     tasks::remote_updates::start_task()?;
     tasks::ceph_detection::start_task();
+    tasks::backup_jobs::start_task();
 
     server.await?;
     log::info!("server shutting down, waiting for active workers to complete");

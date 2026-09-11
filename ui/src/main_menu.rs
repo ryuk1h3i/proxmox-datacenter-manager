@@ -14,6 +14,7 @@ use proxmox_yew_comp::{AclContext, NotesView, Tasks};
 use pdm_api_types::remotes::RemoteType;
 use pdm_api_types::{PRIV_SYS_AUDIT, PRIV_SYS_MODIFY};
 
+use crate::backup::BackupJobsPanel;
 use crate::ceph::CephView;
 use crate::configuration::subscription_registry::SubscriptionRegistryProps;
 use crate::configuration::media::MediaCatalog;
@@ -217,6 +218,15 @@ impl Component for PdmMainMenu {
             "tasks",
             Some("fa fa-list-alt"),
             |_| Tasks::new().into(),
+        );
+
+        register_view(
+            &mut menu,
+            &mut content,
+            tr!("Backup"),
+            "backup",
+            Some("fa fa-floppy-o"),
+            |_| BackupJobsPanel::new().into(),
         );
 
         if self.acl_context.check_privs(&["system"], PRIV_SYS_AUDIT) {

@@ -19,6 +19,9 @@ use pwt::widget::{Button, Column, Container, Fa, Panel, Row};
 
 mod tree;
 
+mod attach_storage;
+pub use attach_storage::AttachPbsStorage;
+
 mod datastore;
 pub use datastore::DatastorePanel;
 
