@@ -13,7 +13,7 @@ use pwt::{
     css::{AlignItems, ColorScheme, FlexFit, JustifyContent},
     prelude::*,
     props::WidgetBuilder,
-    widget::{Column, Container, Fa, Panel, Progress, Row},
+    widget::{Column, Container, Fa, Panel, Progress, Row, TabBarItem, TabPanel},
 };
 
 use pdm_api_types::{resource::PveStorageResource, rrddata::PveStorageDataPoint};
@@ -21,6 +21,7 @@ use pdm_client::types::PveStorageStatus;
 
 use crate::{
     LoadResult,
+    pve::storage_content::StorageContentPanel,
     pve::utils::{render_content_type, render_storage_type},
     renderer::{separator, status_row_right_icon},
 };
@@ -227,6 +228,7 @@ impl yew::Component for StoragePanelComp {
 
     fn view(&self, ctx: &yew::Context<Self>) -> yew::Html {
         let props = ctx.props();
+
         let title: Html = Row::new()
             .gap(2)
             .class(AlignItems::Baseline)
@@ -234,6 +236,39 @@ impl yew::Component for StoragePanelComp {
             .with_child(tr! {"Storage '{0}'", props.info.storage})
             .into();
 
+        let status_view = self.status_view(ctx);
+        let remote = props.remote.clone();
+        let node = props.node.clone();
+        let storage = props.info.storage.clone();
+
+        // no router: the resource tree already owns the route of this panel
+        TabPanel::new()
+            .class(FlexFit)
+            .title(title)
+            .class(ColorScheme::Neutral)
+            .with_item_builder(
+                TabBarItem::new()
+                    .key("status_view")
+                    .label(tr!("Overview"))
+                    .icon_class("fa fa-tachometer"),
+                move |_| status_view.clone(),
+            )
+            .with_item_builder(
+                TabBarItem::new()
+                    .key("content_view")
+                    .label(tr!("Content"))
+                    .icon_class("fa fa-list"),
+                move |_| {
+                    StorageContentPanel::new(remote.clone(), node.clone(), storage.clone()).into()
+                },
+            )
+            .into()
+    }
+}
+
+impl StoragePanelComp {
+    fn status_view(&self, ctx: &yew::Context<Self>) -> yew::Html {
+        let props = ctx.props();
         let mut status_comp = Column::new().gap(2).padding(4);
         let status = match &self.status.data {
             Some(status) => status,
@@ -296,7 +331,6 @@ impl yew::Component for StoragePanelComp {
 
         Panel::new()
             .class(FlexFit)
-            .title(title)
             .class(ColorScheme::Neutral)
             .with_child(
                 // FIXME: add some 'visible' or 'active' property to the progress

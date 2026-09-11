@@ -7,6 +7,7 @@ use pdm_client::types::{
     LxcConfig, LxcConfigMp, LxcConfigRootfs, LxcConfigUnused, PveQmIde, QemuConfig, QemuConfigSata,
     QemuConfigScsi, QemuConfigUnused, QemuConfigVirtio, StorageContent,
 };
+use percent_encoding::percent_decode_str;
 use proxmox_schema::property_string::PropertyString;
 use proxmox_yew_comp::{GuestState, NodeState, StorageState};
 use pwt::{
@@ -301,6 +302,24 @@ pub(crate) fn render_storage_type(ty: &str) -> String {
         "esxi" => "ESXi",
         _ => ty,
     })
+}
+
+/// Derives the destination filename of a download from its URL.
+///
+/// Returns `None` for anything that must not be used as a storage filename, so a
+/// crafted URL cannot smuggle a path into the PVE storage directory.
+pub(crate) fn filename_from_url(url: &str) -> Option<String> {
+    let path = url.split(['?', '#']).next().unwrap_or("");
+    let last = path.rsplit('/').next()?;
+    if last.is_empty() {
+        return None;
+    }
+    let decoded = percent_decode_str(last).decode_utf8().ok()?;
+    let name = decoded.trim();
+    if name.is_empty() || name == "." || name == ".." || name.contains(['/', '\\', '\0']) {
+        return None;
+    }
+    Some(name.to_string())
 }
 
 /// Renders the backend content type of PVE into a human understandable type

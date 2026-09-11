@@ -36,6 +36,7 @@ pub mod qemu;
 pub mod remote;
 pub mod remote_overview;
 pub mod storage;
+pub mod storage_content;
 pub mod utils;
 
 mod tree;
@@ -238,6 +239,8 @@ impl LoadableComponent for PveRemoteComp {
                 storage::StoragePanel::new(remote.clone(), storage.node.clone(), storage.clone())
                     .into()
             }
+            // not selectable in the tree, so this is never rendered
+            PveTreeNode::Pending(_) => html! {},
         };
         let content = NavigationContainer::new().with_child(content);
 

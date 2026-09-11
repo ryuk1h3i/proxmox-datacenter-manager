@@ -13,7 +13,10 @@ use proxmox_yew_comp::{
 };
 use pwt::css::{AlignItems, ColorScheme, FlexFit, FontStyle, JustifyContent};
 use pwt::props::{ContainerBuilder, CssBorderBuilder, ExtractPrimaryKey, WidgetBuilder};
-use pwt::state::{KeyedSlabTree, NavigationContext, NavigationContextExt, Selection, TreeStore};
+use pwt::state::{
+    KeyedSlabTree, NavigationContext, NavigationContextExt, Selection, SharedState,
+    SharedStateObserver, TreeStore,
+};
 use pwt::widget::{
     ActionIcon, Column, Container, Fa, MessageBox, MessageBoxButtons, Row, Toolbar, Tooltip,
     Trigger,
@@ -27,6 +30,7 @@ use pdm_api_types::{
     resource::{PveLxcResource, PveNodeResource, PveQemuResource, PveResource, PveStorageResource},
 };
 
+use crate::pending_guests::{PendingGuest, PendingGuests};
 use crate::{get_deep_url, renderer::render_tree_column, widget::MigrateWindow};
 
 use super::{
@@ -41,24 +45,30 @@ pub enum PveTreeNode {
     Lxc(PveLxcResource),
     Qemu(PveQemuResource),
     Storage(PveStorageResource),
+    /// Placeholder for a guest whose creation task is still running.
+    Pending(PendingGuest),
 }
 
 impl ExtractPrimaryKey for PveTreeNode {
     fn extract_key(&self) -> Key {
-        Key::from(match self {
-            PveTreeNode::Root => "__root__",
-            PveTreeNode::Node(node) => node.id.as_str(),
-            PveTreeNode::Lxc(lxc) => lxc.id.as_str(),
-            PveTreeNode::Qemu(qemu) => qemu.id.as_str(),
-            PveTreeNode::Storage(storage) => storage.id.as_str(),
-        })
+        match self {
+            PveTreeNode::Root => Key::from("__root__"),
+            PveTreeNode::Node(node) => Key::from(node.id.as_str()),
+            PveTreeNode::Lxc(lxc) => Key::from(lxc.id.as_str()),
+            PveTreeNode::Qemu(qemu) => Key::from(qemu.id.as_str()),
+            PveTreeNode::Storage(storage) => Key::from(storage.id.as_str()),
+            // distinct from the real resource id, which may show up concurrently
+            PveTreeNode::Pending(guest) => {
+                Key::from(format!("pending/{}/{}", guest.remote, guest.vmid))
+            }
+        }
     }
 }
 
 impl PveTreeNode {
     fn get_path(&self) -> String {
         match self {
-            PveTreeNode::Root => "datacenter".to_string(),
+            PveTreeNode::Root | PveTreeNode::Pending(_) => "datacenter".to_string(),
             PveTreeNode::Node(node) => format!("node+{}", node.node),
             PveTreeNode::Lxc(lxc) => format!("guest+{}", lxc.vmid),
             PveTreeNode::Qemu(qemu) => format!("guest+{}", qemu.vmid),
@@ -137,6 +147,8 @@ pub enum Msg {
     GuestAction(Action, String), //ID
     KeySelected(Option<Key>),
     RouteChanged(String),
+    /// A guest creation task was registered or changed state.
+    PendingChanged,
 }
 
 pub struct PveTreeComp {
@@ -147,6 +159,9 @@ pub struct PveTreeComp {
     filter: String,
     _nav_handle: ContextHandle<NavigationContext>,
     view_selection: Selection,
+    pending: Option<PendingGuests>,
+    _pending_handle: Option<ContextHandle<PendingGuests>>,
+    _pending_observer: Option<SharedStateObserver<Vec<PendingGuest>>>,
 }
 
 pwt::impl_deref_mut_property!(PveTreeComp, state, LoadableComponentState<ViewState>);
@@ -157,6 +172,7 @@ impl PveTreeComp {
         let resources = ctx.props().resources.as_ref();
         let mut tree = KeyedSlabTree::new();
         let mut root = tree.set_root(PveTreeNode::Root);
+        let mut guest_ids = std::collections::HashSet::new();
         for entry in resources {
             match entry {
                 PveResource::Node(node_info) => {
@@ -169,6 +185,7 @@ impl PveTreeComp {
                     }
                 }
                 PveResource::Qemu(qemu_info) => {
+                    guest_ids.insert(qemu_info.id.clone());
                     let node_id = format!("remote/{}/node/{}", remote, qemu_info.node);
                     let key = Key::from(node_id.as_str());
                     let mut node = match root.find_node_by_key_mut(&key) {
@@ -182,6 +199,7 @@ impl PveTreeComp {
                     node.append(PveTreeNode::Qemu(qemu_info.clone()));
                 }
                 PveResource::Lxc(lxc_info) => {
+                    guest_ids.insert(lxc_info.id.clone());
                     let node_id = format!("remote/{}/node/{}", remote, lxc_info.node);
                     let key = Key::from(node_id.as_str());
                     let mut node = match root.find_node_by_key_mut(&key) {
@@ -210,6 +228,23 @@ impl PveTreeComp {
                 PveResource::Network(_) => {}
             }
         }
+        if let Some(pending) = &self.pending {
+            for guest in pending.list() {
+                if guest.remote != remote || guest_ids.contains(&guest.global_id()) {
+                    continue;
+                }
+                let node_id = format!("remote/{}/node/{}", remote, guest.node);
+                let key = Key::from(node_id.as_str());
+                let mut node = match root.find_node_by_key_mut(&key) {
+                    Some(node) => node,
+                    None => root.append(create_empty_node(node_id)),
+                };
+                if !self.loaded {
+                    node.set_expanded(true);
+                }
+                node.append(PveTreeNode::Pending(guest));
+            }
+        }
         if !self.loaded {
             root.set_expanded(true);
         }
@@ -230,6 +265,10 @@ impl PveTreeComp {
             (PveTreeNode::Node(a), PveTreeNode::Node(b)) => a.node.cmp(&b.node),
             (PveTreeNode::Node(_), _) => std::cmp::Ordering::Less,
             (_, PveTreeNode::Node(_)) => std::cmp::Ordering::Greater,
+            // keep guests being created at the top of their node
+            (PveTreeNode::Pending(a), PveTreeNode::Pending(b)) => a.vmid.cmp(&b.vmid),
+            (PveTreeNode::Pending(_), _) => std::cmp::Ordering::Less,
+            (_, PveTreeNode::Pending(_)) => std::cmp::Ordering::Greater,
             (PveTreeNode::Lxc(a), PveTreeNode::Lxc(b)) => {
                 cmp_guests(a.template, b.template, a.vmid, b.vmid)
             }
@@ -309,6 +348,16 @@ impl LoadableComponent for PveTreeComp {
         let mut state = LoadableComponentState::new();
         state.set_task_base_url(get_base_url(&ctx.props().remote));
 
+        let (pending, _pending_handle) = link
+            .context::<PendingGuests>(Callback::from(|_| ()))
+            .unzip();
+        // the context value itself never changes, only the state behind it
+        let _pending_observer = pending.as_ref().map(|pending| {
+            pending.add_listener(
+                link.callback(|_: SharedState<Vec<PendingGuest>>| Msg::PendingChanged),
+            )
+        });
+
         Self {
             state,
             columns: columns(
@@ -322,6 +371,9 @@ impl LoadableComponent for PveTreeComp {
             filter: String::new(),
             _nav_handle,
             view_selection,
+            pending,
+            _pending_handle,
+            _pending_observer,
         }
     }
 
@@ -400,6 +452,10 @@ impl LoadableComponent for PveTreeComp {
 
                 if let Some(node) = root.find_node_by_key(&key) {
                     let record = node.record().clone();
+                    // a guest that does not exist yet has nothing to show
+                    if matches!(record, PveTreeNode::Pending(_)) {
+                        return false;
+                    }
                     if let Some(nav) = ctx.link().nav_context() {
                         let new_path = record.get_path();
                         let current_path = nav.path();
@@ -449,10 +505,11 @@ impl LoadableComponent for PveTreeComp {
                         // always show tree root node to ensure tree does not look odd.
                         // For now also always show all nodes (should we filter those without any
                         // matches for the node or for it's sub elements?
-                        PveTreeNode::Root | PveTreeNode::Node(_) => true,
+                        PveTreeNode::Root | PveTreeNode::Node(_) | PveTreeNode::Pending(_) => true,
                     });
                 }
             }
+            Msg::PendingChanged => self.load_tree(ctx),
         }
         true
     }
@@ -630,6 +687,21 @@ fn columns(
                     PveTreeNode::Storage(r) => {
                         (utils::render_storage_status_icon(r), r.storage.clone())
                     }
+                    PveTreeNode::Pending(guest) => {
+                        if guest.failed() {
+                            (
+                                Container::new().with_child(
+                                    Fa::new("exclamation-triangle").class(ColorScheme::Warning),
+                                ),
+                                tr!("{0} (creation failed)", guest.vmid),
+                            )
+                        } else {
+                            (
+                                Container::from_tag("i").class("pwt-loading-icon"),
+                                tr!("{0} (creating...)", guest.vmid),
+                            )
+                        }
+                    }
                 };
 
                 render_tree_column(icon.into(), text).into()
@@ -646,6 +718,9 @@ fn columns(
         DataTableColumn::new(tr!("Actions"))
             .width("180px")
             .render(move |entry: &PveTreeNode| {
+                if matches!(entry, PveTreeNode::Pending(_)) {
+                    return html! {};
+                }
                 let (id, local_id, guest_info, node) = match entry {
                     PveTreeNode::Lxc(r) => {
                         let guest_info = GuestInfo::new(GuestType::Lxc, r.vmid);
@@ -680,6 +755,8 @@ fn columns(
                         None,
                         Some(r.node.clone()),
                     ),
+                    // handled by the early return above
+                    PveTreeNode::Pending(_) => unreachable!(),
                 };
 
                 Row::new()

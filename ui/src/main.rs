@@ -23,7 +23,8 @@ use proxmox_yew_comp::{
 //use pbs::MainMenu;
 use pdm_api_types::views::ViewConfig;
 use pdm_ui::{
-    MainMenu, RemoteList, RemoteListCacheEntry, SearchProvider, TopNavBar, ViewListContext,
+    MainMenu, PendingGuests, RemoteList, RemoteListCacheEntry, SearchProvider, TopNavBar,
+    ViewListContext,
 };
 
 type MsgRemoteList = Result<RemoteList, Error>;
@@ -49,6 +50,7 @@ struct DatacenterManagerApp {
     remote_list_error: Option<String>,
     remote_list_timeout: Option<Timeout>,
     search_provider: SearchProvider,
+    pending_guests: PendingGuests,
 
     view_list: Vec<String>,
     view_list_context: ViewListContext,
@@ -195,6 +197,7 @@ impl Component for DatacenterManagerApp {
             remote_list_error: None,
             remote_list_timeout: None,
             search_provider: SearchProvider::new(),
+            pending_guests: PendingGuests::new(),
             view_list: Vec::new(),
             view_list_context,
             _view_list_observer,
@@ -292,12 +295,15 @@ impl Component for DatacenterManagerApp {
         let context = self.remote_list.clone();
         let search_context = self.search_provider.clone();
         let view_list_context = self.view_list_context.clone();
+        let pending_guests = self.pending_guests.clone();
 
         DesktopApp::new(html! {
             <ContextProvider<SearchProvider> context={search_context}>
                 <ContextProvider<RemoteList> {context}>
                     <ContextProvider<ViewListContext> context={view_list_context}>
-                        {body}
+                        <ContextProvider<PendingGuests> context={pending_guests}>
+                            {body}
+                        </ContextProvider<PendingGuests>>
                     </ContextProvider<ViewListContext>>
                 </ContextProvider<RemoteList>>
             </ContextProvider<SearchProvider>>

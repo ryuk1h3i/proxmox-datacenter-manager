@@ -30,10 +30,11 @@ use pwt::props::{
     ContainerBuilder, CssPaddingBuilder, ExtractPrimaryKey, StorageLocation, WidgetBuilder,
     WidgetStyleBuilder,
 };
-use pwt::state::{KeyedSlabTree, PersistentState, Selection, Store, TreeStore};
+use pwt::state::{
+    KeyedSlabTree, PersistentState, Selection, SharedState, SharedStateObserver, Store, TreeStore,
+};
 use pwt::widget::data_table::{DataTable, DataTableColumn, DataTableHeader};
 use pwt::widget::form::{Checkbox, DisplayField, Field, FormContext, Number};
-use pwt::widget::form::Combobox;
 use pwt::widget::menu::{Menu, MenuButton, MenuItem};
 use pwt::widget::{
     ActionIcon, Button, Column, Container, Dialog, Fa, InputPanel, MessageBox, MessageBoxButtons,
@@ -42,12 +43,13 @@ use pwt::widget::{
 
 use pdm_client::types::StorageContent;
 use pdm_api_types::guest::{CreateLxc, CreateQemu};
-use pdm_api_types::media::{MediaContentType, PveDownloadUrl};
+use pdm_api_types::media::MediaContentType;
 use pdm_api_types::remotes::RemoteType;
 use pdm_api_types::RemoteUpid;
-use pdm_api_types::resource::{RemoteResources, Resource};
+use pdm_api_types::resource::{PveLxcResource, PveQemuResource, RemoteResources, Resource};
 use pdm_search::SearchTerm;
 
+use crate::pending_guests::{PendingGuest, PendingGuests, PendingState};
 use crate::pve::utils::{guest_is_live, guest_status_label, render_guest_tags};
 use crate::pve::{GuestInfo, GuestType};
 use crate::renderer::{empty_state, render_resource_name, render_status_icon, render_tree_column};
@@ -68,6 +70,10 @@ const MAX_PARALLEL_IP_LOOKUPS: usize = 8;
 
 /// Re-resolve cached guest addresses every n-th reload.
 const IP_REFRESH_LOADS: u32 = 30;
+
+/// Cache max-age accepted while a guest creation is in flight, so the new guest
+/// replaces its placeholder row shortly after the creation task finished.
+const PENDING_MAX_AGE_S: u64 = 3;
 
 /// How the guest list is presented.
 #[derive(Clone, Copy, PartialEq, Default, Serialize, Deserialize)]
@@ -108,6 +114,8 @@ struct GuestEntry {
     resource: Resource,
     /// Addresses resolved in the background, `None` while unknown.
     ip: Option<String>,
+    /// Set for placeholder rows of guests whose creation task is still running.
+    pending: Option<PendingGuest>,
 }
 
 impl GuestEntry {
@@ -244,6 +252,8 @@ pub enum Msg {
     /// Show the progress of a started task, deriving the task base URL from the
     /// UPID's own remote so concurrent actions on different remotes can't clobber it.
     ShowTask(RemoteUpid),
+    /// A guest creation task was registered or changed state.
+    PendingChanged,
 }
 
 #[doc(hidden)]
@@ -271,28 +281,34 @@ pub struct GuestPanelComp {
     ip_pending: HashSet<String>,
     /// Completed load cycles, used to periodically refresh the cached addresses.
     load_count: u32,
+    /// App-wide state of guest creations still in flight.
+    pending: Option<PendingGuests>,
+    _pending_handle: Option<ContextHandle<PendingGuests>>,
+    _pending_observer: Option<SharedStateObserver<Vec<PendingGuest>>>,
 }
 
 pwt::impl_deref_mut_property!(GuestPanelComp, state, LoadableComponentState<ViewState>);
 
 impl GuestPanelComp {
     fn create_qemu_dialog(&self, ctx: &LoadableComponentContext<Self>) -> Html {
+        let pending = self.pending.clone();
         EditWindow::new(tr!("Create VM"))
             .renderer(create_qemu_input_panel)
             .on_submit({
                 let link = ctx.link().clone();
-                move |form| create_qemu(form, link.clone())
+                move |form| create_qemu(form, link.clone(), pending.clone())
             })
             .on_done(ctx.link().change_view_callback(|_| None))
             .into()
     }
 
     fn create_lxc_dialog(&self, ctx: &LoadableComponentContext<Self>) -> Html {
+        let pending = self.pending.clone();
         EditWindow::new(tr!("Create CT"))
             .renderer(create_lxc_input_panel)
             .on_submit({
                 let link = ctx.link().clone();
-                move |form| create_lxc(form, link.clone())
+                move |form| create_lxc(form, link.clone(), pending.clone())
             })
             .on_done(ctx.link().change_view_callback(|_| None))
             .into()
@@ -355,6 +371,24 @@ impl GuestPanelComp {
         }
     }
 
+    /// Append placeholder rows for guests whose creation task has not produced a
+    /// real resource yet.
+    fn merge_pending(&self, entries: &mut Vec<GuestEntry>) {
+        let Some(pending) = &self.pending else {
+            return;
+        };
+        let known: HashSet<String> = entries
+            .iter()
+            .map(|entry| entry.resource.global_id().to_string())
+            .collect();
+        for guest in pending.list() {
+            if known.contains(&guest.global_id()) {
+                continue;
+            }
+            entries.push(pending_entry(guest));
+        }
+    }
+
     /// Copy the cached addresses into the currently displayed rows.
     fn apply_ips(&mut self) {
         let mut entries = self.store.read().data().to_vec();
@@ -393,6 +427,18 @@ impl LoadableComponent for GuestPanelComp {
         // root stays hidden so the remote groups are the top-level rows
         let tree_store = TreeStore::new().view_root(false);
 
+        let (pending, _pending_handle) = ctx
+            .link()
+            .context::<PendingGuests>(Callback::from(|_| ()))
+            .unzip();
+        // the context value itself never changes, only the state behind it
+        let _pending_observer = pending.as_ref().map(|pending| {
+            pending.add_listener(
+                ctx.link()
+                    .callback(|_: SharedState<Vec<PendingGuest>>| Msg::PendingChanged),
+            )
+        });
+
         Self {
             state: LoadableComponentState::new(),
             store: Store::with_extract_key(|entry: &GuestEntry| entry.key()),
@@ -408,6 +454,9 @@ impl LoadableComponent for GuestPanelComp {
             ip_cache: HashMap::new(),
             ip_pending: HashSet::new(),
             load_count: 0,
+            pending,
+            _pending_handle,
+            _pending_observer,
         }
     }
 
@@ -441,12 +490,14 @@ impl LoadableComponent for GuestPanelComp {
                                 remote: remote.clone(),
                                 resource,
                                 ip,
+                                pending: None,
                             });
                         }
                     }
                 }
                 self.failed_remotes = failed;
                 self.request_ips(ctx, &entries, refresh_ips);
+                self.merge_pending(&mut entries);
                 // only (re)build the tree when it is the active view; in flat mode
                 // the work would be discarded. The filter is preserved across
                 // set_data / update_root_tree, so it need not be reinstalled here.
@@ -489,6 +540,19 @@ impl LoadableComponent for GuestPanelComp {
                 // viewer at the wrong remote
                 self.set_task_base_url(format!("/pve/remotes/{}/tasks", upid.remote()).into());
                 ctx.link().show_task_progress(upid.to_string());
+            }
+            Msg::PendingChanged => {
+                let mut entries = self.store.read().data().to_vec();
+                entries.retain(|entry| entry.pending.is_none());
+                self.merge_pending(&mut entries);
+                if *self.view_mode == ViewMode::Tree {
+                    self.tree_store
+                        .write()
+                        .update_root_tree(build_guest_tree(&entries, false));
+                }
+                self.store.set_data(entries);
+                // a finished creation should surface the real guest right away
+                ctx.link().send_reload();
             }
             Msg::GuestAction(action, key) => {
                 let Some(entry) = self.store.read().lookup_record(&key).cloned() else {
@@ -824,6 +888,13 @@ impl LoadableComponent for GuestPanelComp {
         ctx: &LoadableComponentContext<Self>,
     ) -> Pin<Box<dyn Future<Output = Result<(), Error>>>> {
         let link = ctx.link().clone();
+        // while a creation is in flight, bypass the server's resource cache so the
+        // placeholder row is replaced by the real guest as soon as possible
+        let max_age = self
+            .pending
+            .as_ref()
+            .is_some_and(|pending| !pending.list().is_empty())
+            .then_some(PENDING_MAX_AGE_S);
         Box::pin(async move {
             // Fetch all resources and filter to guests client-side (below). We
             // deliberately avoid a `search` filter like "type:qemu type:lxc": the
@@ -833,7 +904,7 @@ impl LoadableComponent for GuestPanelComp {
             // resource-types would let us narrow to guests server-side (the
             // search is left empty, so failed remotes are still returned).
             // `None` lets the server apply its default cache max-age.
-            let remotes = crate::pdm_client().resources(None, None).await?;
+            let remotes = crate::pdm_client().resources(max_age, None).await?;
             link.send_message(Msg::LoadFinished(remotes));
             Ok(())
         })
@@ -843,6 +914,7 @@ impl LoadableComponent for GuestPanelComp {
 async fn create_qemu(
     form_ctx: FormContext,
     link: LoadableComponentScope<GuestPanelComp>,
+    pending: Option<PendingGuests>,
 ) -> Result<(), Error> {
     let remote = form_ctx.read().get_field_text("remote");
     let node = form_ctx.read().get_field_text("node");
@@ -865,14 +937,23 @@ async fn create_qemu(
     if !bridge.is_empty() {
         data["net0"] = serde_json::Value::String(format!("virtio,bridge={bridge}"));
     }
-    let mut config: CreateQemu = serde_json::from_value(data)?;
-    if let Some(volid) = prepare_media(&form_ctx, &remote, &node, MediaContentType::Iso).await? {
-        config.ide2 = Some(format!("{volid},media=cdrom"));
-    }
+    let config: CreateQemu = serde_json::from_value(data)?;
+    let vmid = config.vmid;
+    let name = config.name.clone().unwrap_or_else(|| vmid.to_string());
     let upid = crate::pdm_client()
         .pve_create_qemu(&remote, &node, &config)
         .await?;
-    link.send_message(Msg::ShowTask(upid));
+    match &pending {
+        Some(pending) => pending.add(PendingGuest::new(
+            remote,
+            node,
+            vmid,
+            name,
+            GuestType::Qemu,
+            upid,
+        )),
+        None => link.send_message(Msg::ShowTask(upid)),
+    }
     link.send_reload();
     Ok(())
 }
@@ -880,6 +961,7 @@ async fn create_qemu(
 async fn create_lxc(
     form_ctx: FormContext,
     link: LoadableComponentScope<GuestPanelComp>,
+    pending: Option<PendingGuests>,
 ) -> Result<(), Error> {
     let remote = form_ctx.read().get_field_text("remote");
     let node = form_ctx.read().get_field_text("node");
@@ -901,58 +983,72 @@ async fn create_lxc(
         data["net0"] =
             serde_json::Value::String(format!("name=eth0,bridge={bridge},ip=dhcp"));
     }
-    if let Some(volid) = prepare_media(&form_ctx, &remote, &node, MediaContentType::Vztmpl).await? {
-        data["ostemplate"] = serde_json::Value::String(volid);
-    }
     let config: CreateLxc = serde_json::from_value(data)?;
+    let vmid = config.vmid;
+    let name = config.hostname.clone().unwrap_or_else(|| vmid.to_string());
     let upid = crate::pdm_client()
         .pve_create_lxc(&remote, &node, &config)
         .await?;
-    link.send_message(Msg::ShowTask(upid));
+    match &pending {
+        Some(pending) => pending.add(PendingGuest::new(
+            remote,
+            node,
+            vmid,
+            name,
+            GuestType::Lxc,
+            upid,
+        )),
+        None => link.send_message(Msg::ShowTask(upid)),
+    }
     link.send_reload();
     Ok(())
 }
 
-async fn prepare_media(
-    form_ctx: &FormContext,
-    remote: &str,
-    node: &str,
-    content: MediaContentType,
-) -> Result<Option<String>, Error> {
-    let url = form_ctx.read().get_field_text("media-url");
-    if url.is_empty() {
-        return Ok(None);
-    }
-    let storage = form_ctx.read().get_field_text("media-storage");
-    let filename = form_ctx.read().get_field_text("media-filename");
-    if storage.is_empty() || filename.is_empty() {
-        anyhow::bail!("media storage and filename are required when a URL is provided");
-    }
-    let checksum = form_ctx.read().get_field_text("media-checksum");
-    let checksum_algorithm = form_ctx.read().get_field_text("media-checksum-algorithm");
-    if checksum.is_empty() != checksum_algorithm.is_empty() {
-        anyhow::bail!("checksum and checksum algorithm must be provided together");
-    }
-    let download = PveDownloadUrl {
-        url,
-        filename: filename.clone(),
-        content,
-        checksum: (!checksum.is_empty()).then_some(checksum),
-        checksum_algorithm: (!checksum_algorithm.is_empty()).then_some(checksum_algorithm),
-        verify_certificates: Some(true),
+/// Builds the placeholder row shown while a guest is being created.
+fn pending_entry(guest: PendingGuest) -> GuestEntry {
+    let id = guest.global_id();
+    let resource = match guest.guest_type {
+        GuestType::Qemu => Resource::PveQemu(PveQemuResource {
+            cpu: 0.0,
+            maxcpu: 0.0,
+            disk: 0,
+            maxdisk: 0,
+            id,
+            maxmem: 0,
+            mem: 0,
+            name: guest.name.clone(),
+            node: guest.node.clone(),
+            pool: String::new(),
+            status: "creating".to_string(),
+            tags: Vec::new(),
+            template: false,
+            uptime: 0,
+            vmid: guest.vmid,
+        }),
+        GuestType::Lxc => Resource::PveLxc(PveLxcResource {
+            cpu: 0.0,
+            maxcpu: 0.0,
+            disk: 0,
+            maxdisk: 0,
+            id,
+            maxmem: 0,
+            mem: 0,
+            name: guest.name.clone(),
+            node: guest.node.clone(),
+            pool: String::new(),
+            status: "creating".to_string(),
+            tags: Vec::new(),
+            template: false,
+            uptime: 0,
+            vmid: guest.vmid,
+        }),
     };
-    let client = crate::pdm_client();
-    let upid = client
-        .pve_download_storage_content(remote, node, &storage, &download)
-        .await?;
-    let status = client.pve_wait_for_task(&upid).await?;
-    if status.exitstatus.as_deref() != Some("OK") {
-        anyhow::bail!(
-            "PVE media download failed: {}",
-            status.exitstatus.as_deref().unwrap_or("unknown status")
-        );
+    GuestEntry {
+        remote: guest.remote.clone(),
+        resource,
+        ip: None,
+        pending: Some(guest),
     }
-    Ok(Some(format!("{storage}:{content}/{filename}")))
 }
 
 /// Shared shell for the guest creation forms: wide enough for two columns, but
@@ -1037,31 +1133,10 @@ fn create_qemu_input_panel(form_ctx: &FormContext) -> Html {
             .key(format!("media-{remote}-{node}-iso"))
             .name("media-selection")
             .disabled(remote.is_empty() || node.is_empty())
-            .placeholder(tr!("Select existing media or use a download URL below")),
+            .placeholder(tr!(
+                "Select an ISO image (download new ones from the storage's Content tab)"
+            )),
         )
-        .with_large_field(
-            tr!("Download media URL"),
-            Field::new().name("media-url").placeholder("https://example.invalid/image.iso"),
-        )
-        .with_field(
-            tr!("Media storage"),
-            PveStorageSelector::new(remote.clone())
-                .key(format!("storage-media-{remote}-{node}"))
-                .name("media-storage")
-                .node(AttrValue::from(node.clone()))
-                .content_types(vec![StorageContent::Iso])
-                .on_change(store_selector_value(form_ctx, "media-storage"))
-                .disabled(remote.is_empty() || node.is_empty()),
-        )
-        .with_right_field(tr!("Media filename"), Field::new().name("media-filename"))
-        .with_field(
-            tr!("Checksum algorithm"),
-            Combobox::new()
-                .name("media-checksum-algorithm")
-                .editable(false)
-                .items(Rc::new(vec!["sha256".into(), "sha512".into()])),
-        )
-        .with_right_field(tr!("Checksum"), Field::new().name("media-checksum"))
         .with_field(
             tr!("System disk storage"),
             PveStorageSelector::new(remote.clone())
@@ -1114,31 +1189,10 @@ fn create_lxc_input_panel(form_ctx: &FormContext) -> Html {
             .key(format!("media-{remote}-{node}-vztmpl"))
             .name("media-selection")
             .disabled(remote.is_empty() || node.is_empty())
-            .placeholder(tr!("Select existing template or use a download URL below")),
+            .placeholder(tr!(
+                "Select a template (download new ones from the storage's Content tab)"
+            )),
         )
-        .with_large_field(
-            tr!("Download template URL"),
-            Field::new().name("media-url").placeholder("https://example.invalid/template.tar.zst"),
-        )
-        .with_field(
-            tr!("Template storage"),
-            PveStorageSelector::new(remote.clone())
-                .key(format!("storage-media-{remote}-{node}"))
-                .name("media-storage")
-                .node(AttrValue::from(node.clone()))
-                .content_types(vec![StorageContent::Vztmpl])
-                .on_change(store_selector_value(form_ctx, "media-storage"))
-                .disabled(remote.is_empty() || node.is_empty()),
-        )
-        .with_right_field(tr!("Template filename"), Field::new().name("media-filename"))
-        .with_field(
-            tr!("Checksum algorithm"),
-            Combobox::new()
-                .name("media-checksum-algorithm")
-                .editable(false)
-                .items(Rc::new(vec!["sha256".into(), "sha512".into()])),
-        )
-        .with_right_field(tr!("Checksum"), Field::new().name("media-checksum"))
         .with_field(
             tr!("CPU cores"),
             Number::new().name("cores").min(1u64).placeholder("2"),
@@ -1297,22 +1351,37 @@ fn free_text_match(entry: &GuestEntry, text: &str) -> bool {
 // --- shared cell renderers, used by both the flat and the tree columns ---
 
 fn guest_label(entry: &GuestEntry) -> Html {
-    render_tree_column(
-        render_status_icon(&entry.resource).into(),
-        entry.resource.name().to_string(),
-    )
-    .into()
+    let icon: Html = match &entry.pending {
+        Some(guest) if guest.failed() => Fa::new("exclamation-triangle")
+            .class(ColorScheme::Warning)
+            .into(),
+        Some(_) => Container::from_tag("i").class("pwt-loading-icon").into(),
+        None => render_status_icon(&entry.resource).into(),
+    };
+    render_tree_column(icon, entry.resource.name().to_string()).into()
 }
 
 fn status_html(entry: &GuestEntry) -> Html {
-    guest_status_label(entry.resource.status()).into()
+    match &entry.pending {
+        Some(guest) => match &guest.state {
+            PendingState::Failed(_) => tr!("Creation failed").into(),
+            _ => tr!("Creating...").into(),
+        },
+        None => guest_status_label(entry.resource.status()).into(),
+    }
 }
 
 fn cpu_html(entry: &GuestEntry) -> Html {
+    if entry.pending.is_some() {
+        return html! {};
+    }
     rrd_value_renderer::render_cpu_usage(&entry.cpu()).into()
 }
 
 fn mem_html(entry: &GuestEntry) -> Html {
+    if entry.pending.is_some() {
+        return html! {};
+    }
     tr!(
         "{0} of {1}",
         HumanByte::from(entry.mem()),
@@ -1338,6 +1407,9 @@ fn ip_html(entry: &GuestEntry) -> Html {
 }
 
 fn guest_actions(link: &LoadableComponentScope<GuestPanelComp>, entry: &GuestEntry) -> Html {
+    if entry.pending.is_some() {
+        return html! {};
+    }
     let key = entry.key();
     let status = entry.resource.status().to_string();
     let template = entry.template();
