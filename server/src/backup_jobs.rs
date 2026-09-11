@@ -493,7 +493,7 @@ pub async fn follow_migrated_guests() -> Result<Vec<String>, Error> {
     let mut changed = Vec::new();
     let job_ids: Vec<String> = config
         .iter()
-        .map(|(id, _)| id.clone())
+        .map(|(id, _)| id.to_string())
         .collect();
 
     for job_id in job_ids {

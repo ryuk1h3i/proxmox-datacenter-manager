@@ -59,7 +59,7 @@ impl GuestSelector {
 }
 
 pub enum Msg {
-    Loaded(Result<Vec<RemoteResources>, Error>),
+    Loaded(Result<Vec<RemoteResources>, String>),
     Filter(String),
     SelectionChange,
 }
@@ -166,7 +166,11 @@ impl ManagedField for GuestSelectorField {
         async_pool.spawn({
             let link = ctx.link().clone();
             async move {
-                link.send_message(Msg::Loaded(crate::pdm_client().resources(None, None).await));
+                let result = crate::pdm_client()
+                    .resources(None, None)
+                    .await
+                    .map_err(|err| err.to_string());
+                link.send_message(Msg::Loaded(result));
             }
         });
 
@@ -186,7 +190,7 @@ impl ManagedField for GuestSelectorField {
     fn update(&mut self, ctx: &ManagedFieldContext<Self>, msg: Self::Message) -> bool {
         match msg {
             Msg::Loaded(Err(err)) => {
-                self.load_error = Some(err.to_string());
+                self.load_error = Some(err);
             }
             Msg::Loaded(Ok(remotes)) => {
                 self.load_error = None;

@@ -3,7 +3,6 @@
 use std::collections::HashSet;
 use std::rc::Rc;
 
-use anyhow::Error;
 use yew::html::IntoEventCallback;
 use yew::virtual_dom::{Key, VComp, VNode};
 
@@ -61,12 +60,12 @@ impl From<AttachPbsStorage> for VNode {
 }
 
 pub enum Msg {
-    DatastoresLoaded(Result<Vec<String>, Error>),
+    DatastoresLoaded(Result<Vec<String>, String>),
     SelectDatastore(String),
-    StateLoaded(Result<Vec<PbsPveStorageState>, Error>),
+    StateLoaded(Result<Vec<PbsPveStorageState>, String>),
     SetStorage(String),
     Apply,
-    Applied(Result<Vec<PbsAttachResult>, Error>),
+    Applied(Result<Vec<PbsAttachResult>, String>),
     SelectionChange,
 }
 
@@ -90,7 +89,8 @@ impl AttachPbsStorageComp {
         self.async_pool.spawn(async move {
             let result = crate::pdm_client()
                 .pbs_pve_storage_state(&remote, &datastore)
-                .await;
+                .await
+                .map_err(|err| err.to_string());
             link.send_message(Msg::StateLoaded(result));
         });
     }
@@ -109,7 +109,8 @@ impl Component for AttachPbsStorageComp {
                 let result = crate::pdm_client()
                     .pbs_list_datastores(&remote)
                     .await
-                    .map(|list| list.into_iter().map(|ds| ds.name).collect());
+                    .map(|list| list.into_iter().map(|ds| ds.name).collect())
+                    .map_err(|err| err.to_string());
                 link.send_message(Msg::DatastoresLoaded(result));
             }
         });
@@ -134,7 +135,7 @@ impl Component for AttachPbsStorageComp {
 
     fn update(&mut self, ctx: &Context<Self>, msg: Self::Message) -> bool {
         match msg {
-            Msg::DatastoresLoaded(Err(err)) => self.error = Some(err.to_string()),
+            Msg::DatastoresLoaded(Err(err)) => self.error = Some(err),
             Msg::DatastoresLoaded(Ok(list)) => {
                 self.error = None;
                 self.datastores = Rc::new(list.iter().map(|ds| AttrValue::from(ds.clone())).collect());
@@ -151,7 +152,7 @@ impl Component for AttachPbsStorageComp {
                 self.done = false;
                 self.load_state(ctx, datastore);
             }
-            Msg::StateLoaded(Err(err)) => self.error = Some(err.to_string()),
+            Msg::StateLoaded(Err(err)) => self.error = Some(err),
             Msg::StateLoaded(Ok(states)) => {
                 self.error = None;
                 let rows: Vec<RemoteRow> = states
@@ -199,13 +200,14 @@ impl Component for AttachPbsStorageComp {
                             &storage,
                             Some(&remotes),
                         )
-                        .await;
+                        .await
+                        .map_err(|err| err.to_string());
                     link.send_message(Msg::Applied(result));
                 });
             }
             Msg::Applied(Err(err)) => {
                 self.busy = false;
-                self.error = Some(err.to_string());
+                self.error = Some(err);
             }
             Msg::Applied(Ok(results)) => {
                 self.busy = false;

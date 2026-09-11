@@ -9,15 +9,15 @@ use yew::virtual_dom::{Key, VComp, VNode};
 
 use proxmox_yew_comp::percent_encoding::percent_encode_component;
 use proxmox_yew_comp::{
-    ConfirmDialog, LoadableComponent, LoadableComponentContext, LoadableComponentMaster,
+    LoadableComponent, LoadableComponentContext, LoadableComponentMaster,
     LoadableComponentScopeExt, LoadableComponentState, http_delete,
 };
 use pwt::css::FlexFit;
 use pwt::prelude::*;
-use pwt::props::{ContainerBuilder, WidgetBuilder};
+use pwt::props::ContainerBuilder;
 use pwt::state::{Selection, Store};
 use pwt::widget::data_table::{DataTable, DataTableColumn, DataTableHeader};
-use pwt::widget::{Button, Dialog, MessageBox, MessageBoxButtons, Toolbar};
+use pwt::widget::{Button, ConfirmDialog, Container, Dialog, Toolbar};
 
 use pdm_client::types::{BackupJobConfig, BackupJobRemoteStatus, BackupJobSyncState};
 
@@ -389,9 +389,23 @@ impl LoadableComponent for BackupJobsPanelComp {
                     .into(),
             ),
             ViewState::Info => Some(
-                MessageBox::new(tr!("Backup Job"), self.info.clone())
-                    .buttons(MessageBoxButtons::Ok)
+                Dialog::new(tr!("Backup Job"))
+                    .width(520)
                     .on_close(ctx.link().change_view_callback(|_| None))
+                    .with_child(
+                        Container::new()
+                            .padding(4)
+                            .with_child(self.info.clone()),
+                    )
+                    .with_child(
+                        Toolbar::new()
+                            .border_top(true)
+                            .with_flex_spacer()
+                            .with_child(
+                                Button::new(tr!("Close"))
+                                    .on_activate(ctx.link().change_view_callback(|_| None)),
+                            ),
+                    )
                     .into(),
             ),
         }

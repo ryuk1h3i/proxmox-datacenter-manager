@@ -95,7 +95,7 @@ pub fn read_backup_job(id: String) -> Result<BackupJobConfig, Error> {
 /// Create a unified backup job and materialize it on the involved remotes.
 pub async fn create_backup_job(job: BackupJobConfig) -> Result<(), Error> {
     if job.schedule.is_empty() {
-        param_bail!("schedule", "a schedule is required");
+        param_bail!("schedule", "a schedule is required for job '{}'", job.id);
     }
 
     {
