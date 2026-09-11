@@ -56,12 +56,15 @@ fn pbs_connection_info(remote: &str) -> Result<PbsConnectionInfo, Error> {
 
     let (server, port) = split_host_port(&node.hostname);
 
+    // `remotes.cfg` only holds a placeholder, the real secret lives in `remotes.shadow`.
+    let password = pdm_config::remotes::get_secret_token(entry)?;
+
     Ok(PbsConnectionInfo {
         server,
         port,
         fingerprint: node.fingerprint.clone(),
         username: entry.authid.to_string(),
-        password: entry.token.clone(),
+        password,
     })
 }
 
