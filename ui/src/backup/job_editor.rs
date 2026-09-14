@@ -5,6 +5,7 @@ use std::rc::Rc;
 
 use anyhow::Error;
 use serde_json::{Map, Value, json};
+use yew::virtual_dom::Key;
 
 use proxmox_client::ApiResponseData;
 use proxmox_yew_comp::percent_encoding::percent_encode_component;
@@ -18,6 +19,7 @@ use pwt::widget::{Column, InputPanel};
 use pdm_api_types::remotes::RemoteType;
 
 use super::guest_selector::GuestSelector;
+use crate::pbs::PbsDatastoreSelector;
 use crate::widget::RemoteSelector;
 
 /// Optional string properties that have to be removed explicitly when cleared.
@@ -49,7 +51,7 @@ pub fn backup_job_editor(id: Option<String>, done: Callback<()>) -> Html {
     })
     .width(1000)
     .min_height(640)
-    .renderer(move |_ctx: &FormContext| render_panel(render_id.clone()))
+    .renderer(move |ctx: &FormContext| render_panel(ctx, render_id.clone()))
     .on_submit({
         let id = id.clone();
         move |ctx: FormContext| {
@@ -239,7 +241,8 @@ fn build_payload(data: Value, editing: bool) -> Value {
     Value::Object(out)
 }
 
-fn render_panel(id: Option<String>) -> Html {
+fn render_panel(form_ctx: &FormContext, id: Option<String>) -> Html {
+    let pbs_remote = form_ctx.read().get_field_text("pbs-remote");
     let mut panel = InputPanel::new().padding(4);
 
     match &id {
@@ -266,13 +269,36 @@ fn render_panel(id: Option<String>) -> Html {
             RemoteSelector::new()
                 .name("pbs-remote")
                 .remote_type(RemoteType::Pbs),
-        )
-        .with_right_field(
+        );
+
+    let panel = if pbs_remote.is_empty() {
+        panel.with_right_field(
             tr!("Datastore"),
             Field::new()
                 .name("pbs-datastore")
-                .placeholder(tr!("datastore of the backup server")),
+                .key("pbs-datastore-unset")
+                .disabled(true)
+                .placeholder(tr!("select a backup server first")),
         )
+    } else {
+        panel.with_right_field(
+            tr!("Datastore"),
+            PbsDatastoreSelector::new(&pbs_remote)
+                .name("pbs-datastore")
+                .key(format!("pbs-datastore-{pbs_remote}"))
+                .placeholder(tr!("needed when the server has several datastores"))
+                .on_change({
+                    let form_ctx = form_ctx.clone();
+                    move |key: Key| {
+                        form_ctx
+                            .write()
+                            .set_field_value("pbs-datastore", key.to_string().into());
+                    }
+                }),
+        )
+    };
+
+    let panel = panel
         .with_large_field(
             tr!("Storage on the PVE remotes"),
             Field::new()

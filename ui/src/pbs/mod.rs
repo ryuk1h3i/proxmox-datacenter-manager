@@ -25,6 +25,9 @@ pub use attach_storage::AttachPbsStorage;
 mod datastore;
 pub use datastore::DatastorePanel;
 
+mod datastore_selector;
+pub use datastore_selector::PbsDatastoreSelector;
+
 mod jobs;
 mod maintenance;
 
