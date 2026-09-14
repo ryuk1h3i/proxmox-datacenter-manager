@@ -1,6 +1,9 @@
 mod migrate_window;
 pub use migrate_window::MigrateWindow;
 
+mod restore_window;
+pub use restore_window::{RestoreSource, RestoreWindow};
+
 mod snapshot_window;
 pub use snapshot_window::SnapshotWindow;
 

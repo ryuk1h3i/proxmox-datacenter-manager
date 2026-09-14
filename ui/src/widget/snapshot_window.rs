@@ -32,8 +32,10 @@ use pwt::widget::{
 use pwt_macros::builder;
 
 use pdm_api_types::RemoteUpid;
+use pdm_client::types::{BackupGuestType, PveBackupContent};
 
 use crate::pve::{GuestInfo, GuestType};
+use crate::widget::{RestoreSource, RestoreWindow};
 
 /// A guest snapshot, unified across QEMU and LXC (LXC has no `vmstate`).
 #[derive(Clone, PartialEq)]
@@ -58,6 +60,9 @@ impl SnapshotItem {
 enum SnapshotTreeEntry {
     Root,
     Item(SnapshotItem),
+    /// Header of the backup archives the remote can restore from.
+    BackupRoot,
+    Backup(PveBackupContent),
 }
 
 impl ExtractPrimaryKey for SnapshotTreeEntry {
@@ -67,6 +72,8 @@ impl ExtractPrimaryKey for SnapshotTreeEntry {
             // can never collide with an item key (a duplicate insert would panic in debug).
             SnapshotTreeEntry::Root => Key::from("__root__"),
             SnapshotTreeEntry::Item(s) => Key::from(s.name.clone()),
+            SnapshotTreeEntry::BackupRoot => Key::from("__backups__"),
+            SnapshotTreeEntry::Backup(b) => Key::from(format!("backup+{}", b.volid)),
         }
     }
 }
@@ -78,7 +85,10 @@ impl ExtractPrimaryKey for SnapshotTreeEntry {
 ///
 /// All nodes are force-expanded on every build: the tree is small and this keeps the current
 /// state (NOW) and a just-created snapshot visible after each create/delete/rollback reload.
-fn build_snapshot_tree(mut items: Vec<SnapshotItem>) -> KeyedSlabTree<SnapshotTreeEntry> {
+fn build_snapshot_tree(
+    mut items: Vec<SnapshotItem>,
+    backups: Vec<PveBackupContent>,
+) -> KeyedSlabTree<SnapshotTreeEntry> {
     let names: HashSet<String> = items.iter().map(|s| s.name.clone()).collect();
     // Stable sibling order by time; the parentless 'current' (snaptime None) sorts last.
     items.sort_by_key(|s| (s.is_current(), s.snaptime.unwrap_or(i64::MAX)));
@@ -126,6 +136,17 @@ fn build_snapshot_tree(mut items: Vec<SnapshotItem>) -> KeyedSlabTree<SnapshotTr
             break;
         }
     }
+
+    if !backups.is_empty() {
+        if let Some(mut root) = tree.lookup_node_mut(&root_key) {
+            let mut node = root.append(SnapshotTreeEntry::BackupRoot);
+            node.set_expanded(true);
+            for backup in backups {
+                node.append(SnapshotTreeEntry::Backup(backup));
+            }
+        }
+    }
+
     tree
 }
 
@@ -195,11 +216,13 @@ enum ViewState {
     ConfirmDelete(String),
     /// Confirm rolling back to a snapshot (offers the start-after-rollback option).
     ConfirmRollback(String),
+    /// Restore a backup archive into this guest.
+    Restore(PveBackupContent),
 }
 
 enum Msg {
     /// Stash a finished load into the tree store.
-    LoadResult(Vec<SnapshotItem>),
+    LoadResult(Vec<SnapshotItem>, Vec<PveBackupContent>),
     /// A snapshot action started a task; show its auto-closing progress.
     ShowTask(RemoteUpid),
     /// Run an action (delete or rollback) against a snapshot, on confirmation.
@@ -440,17 +463,22 @@ impl LoadableComponent for PdmSnapshotWindow {
                     })
                     .collect(),
             };
-            link.send_message(Msg::LoadResult(items));
+            // the backups are a bonus, a remote without backup storage must still work
+            let backups = client
+                .pve_list_backup_content(&remote, None, Some(guest_info.vmid), None)
+                .await
+                .unwrap_or_default();
+            link.send_message(Msg::LoadResult(items, backups));
             Ok(())
         })
     }
 
     fn update(&mut self, ctx: &LoadableComponentContext<Self>, msg: Self::Message) -> bool {
         match msg {
-            Msg::LoadResult(items) => {
+            Msg::LoadResult(items, backups) => {
                 self.store
                     .write()
-                    .update_root_tree(build_snapshot_tree(items));
+                    .update_root_tree(build_snapshot_tree(items, backups));
             }
             Msg::ShowTask(upid) => self.show_task(ctx, upid),
             Msg::RunAction {
@@ -666,6 +694,28 @@ impl LoadableComponent for PdmSnapshotWindow {
                         .into(),
                 )
             }
+            ViewState::Restore(backup) => {
+                let guest_type = match backup.guest_type {
+                    Some(guest_type) => guest_type,
+                    None => match props.guest_info.guest_type {
+                        GuestType::Qemu => BackupGuestType::Vm,
+                        GuestType::Lxc => BackupGuestType::Ct,
+                    },
+                };
+                let source = RestoreSource::Volid {
+                    volid: backup.volid.clone(),
+                };
+                Some(
+                    RestoreWindow::new(source, guest_type, props.guest_info.vmid)
+                        .target_remote(props.remote.clone())
+                        .on_close(link.change_view_callback(|_| None))
+                        .on_submit({
+                            let link = link.clone();
+                            move |upid| link.send_message(Msg::ShowTask(upid))
+                        })
+                        .into(),
+                )
+            }
         }
     }
 }
@@ -681,14 +731,18 @@ fn columns(
         DataTableColumn::new(tr!("Name"))
             .flex(2)
             .tree_column(store)
-            .render(|e: &SnapshotTreeEntry| {
-                let SnapshotTreeEntry::Item(s) = e else {
-                    return html! {};
-                };
-                if s.is_current() {
-                    html! { <b>{ tr!("NOW") }</b> }
-                } else {
-                    html! { { s.name.clone() } }
+            .render(|e: &SnapshotTreeEntry| match e {
+                SnapshotTreeEntry::Root => html! {},
+                SnapshotTreeEntry::BackupRoot => html! { <b>{ tr!("Backups") }</b> },
+                SnapshotTreeEntry::Backup(b) => {
+                    html! { { b.storage.clone() } }
+                }
+                SnapshotTreeEntry::Item(s) => {
+                    if s.is_current() {
+                        html! { <b>{ tr!("NOW") }</b> }
+                    } else {
+                        html! { { s.name.clone() } }
+                    }
                 }
             })
             .into(),
@@ -699,7 +753,11 @@ fn columns(
                     Some(t) => render_epoch(t).into(),
                     None => html! { {"-"} },
                 },
-                SnapshotTreeEntry::Root => html! {},
+                SnapshotTreeEntry::Backup(b) => match b.ctime {
+                    Some(t) => render_epoch(t).into(),
+                    None => html! { {"-"} },
+                },
+                _ => html! {},
             })
             .into(),
     ];
@@ -727,6 +785,29 @@ fn columns(
             .width("110px")
             .justify("center")
             .render(move |e: &SnapshotTreeEntry| {
+                if let SnapshotTreeEntry::Backup(backup) = e {
+                    let backup = backup.clone();
+                    return Row::new()
+                        .class(pwt::css::JustifyContent::Center)
+                        .with_child(
+                            Tooltip::new(
+                                ActionIcon::new("fa fa-fw fa-undo")
+                                    .tabindex(0)
+                                    .aria_label(tr!("Restore"))
+                                    .on_activate({
+                                        let link = link.clone();
+                                        let backup = backup.clone();
+                                        move |_| {
+                                            link.change_view(Some(ViewState::Restore(
+                                                backup.clone(),
+                                            )))
+                                        }
+                                    }),
+                            )
+                            .tip(tr!("Restore")),
+                        )
+                        .into();
+                }
                 let SnapshotTreeEntry::Item(s) = e else {
                     return html! {};
                 };
@@ -803,7 +884,21 @@ fn columns(
             .flex(3)
             .render(|e: &SnapshotTreeEntry| match e {
                 SnapshotTreeEntry::Item(s) => html! { { s.description.clone() } },
-                SnapshotTreeEntry::Root => html! {},
+                SnapshotTreeEntry::Backup(b) => {
+                    let mut text = b.notes.clone().unwrap_or_default();
+                    if let Some(size) = b.size {
+                        let size = proxmox_human_byte::HumanByte::from(size);
+                        text = match text.is_empty() {
+                            true => size.to_string(),
+                            false => format!("{text} ({size})"),
+                        };
+                    }
+                    if b.protected == Some(true) {
+                        text = format!("{text} - {}", tr!("protected"));
+                    }
+                    html! { { text } }
+                }
+                _ => html! {},
             })
             .into(),
     );

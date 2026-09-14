@@ -72,6 +72,8 @@ const MAIN_ROUTER: Router = Router::new()
 #[sortable]
 const REMOTE_SUBDIRS: SubdirMap = &sorted!([
     ("backup", &backup::ROUTER),
+    ("backup-content", &backup::CONTENT_ROUTER),
+    ("restore", &backup::RESTORE_ROUTER),
     ("vzdump", &backup::VZDUMP_ROUTER),
     ("lxc", &lxc::ROUTER),
     ("firewall", &firewall::CLUSTER_FW_ROUTER),

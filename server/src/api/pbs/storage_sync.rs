@@ -111,25 +111,28 @@ fn check_response(response: HttpApiResponse) -> Result<(), Error> {
     Ok(())
 }
 
+/// Whether a storage is a `pbs` storage for the given server and, if given, datastore.
+pub(crate) fn is_matching_storage(storage: &Value, server: &str, datastore: Option<&str>) -> bool {
+    storage.get("type").and_then(Value::as_str) == Some("pbs")
+        && match datastore {
+            Some(datastore) => storage.get("datastore").and_then(Value::as_str) == Some(datastore),
+            None => true,
+        }
+        && storage
+            .get("server")
+            .and_then(Value::as_str)
+            .is_some_and(|value| value.eq_ignore_ascii_case(server))
+}
+
 /// Find a `pbs` storage pointing at the given server and, if given, datastore.
 pub(crate) fn find_matching_storage<'a>(
     storages: &'a [Value],
     server: &str,
     datastore: Option<&str>,
 ) -> Option<&'a Value> {
-    storages.iter().find(|storage| {
-        storage.get("type").and_then(Value::as_str) == Some("pbs")
-            && match datastore {
-                Some(datastore) => {
-                    storage.get("datastore").and_then(Value::as_str) == Some(datastore)
-                }
-                None => true,
-            }
-            && storage
-                .get("server")
-                .and_then(Value::as_str)
-                .is_some_and(|value| value.eq_ignore_ascii_case(server))
-    })
+    storages
+        .iter()
+        .find(|storage| is_matching_storage(storage, server, datastore))
 }
 
 pub(crate) fn find_storage_by_id<'a>(storages: &'a [Value], id: &str) -> Option<&'a Value> {

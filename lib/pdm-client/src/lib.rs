@@ -39,6 +39,9 @@ pub mod types {
         BackupJobConfig, BackupJobConfigUpdater, BackupJobGuest, BackupJobRemoteStatus,
         BackupJobSyncState, BackupJobTarget,
     };
+    pub use pdm_api_types::backup_restore::{
+        BackupGuestType, PveBackupContent, PveRestoreRequest,
+    };
     pub use pdm_api_types::pbs::{PbsAttachRequest, PbsAttachResult, PbsPveStorageState};
     pub use pdm_api_types::pve_jobs::{
         PveBackupJob, PveBackupJobConfig, PveReplicationJob, PveReplicationJobConfig,
@@ -1996,6 +1999,34 @@ impl<T: HttpApiClient> PdmClient<T> {
             .await?
             .expect_json()?
             .data)
+    }
+
+    /// List the backup archives a PVE remote can restore from.
+    pub async fn pve_list_backup_content(
+        &self,
+        remote: &str,
+        node: Option<&str>,
+        vmid: Option<u32>,
+        storage: Option<&str>,
+    ) -> Result<Vec<PveBackupContent>, Error> {
+        let path = ApiPathBuilder::new(format!(
+            "/api2/extjs/pve/remotes/{remote}/backup-content"
+        ))
+        .maybe_arg("node", &node)
+        .maybe_arg("vmid", &vmid)
+        .maybe_arg("storage", &storage)
+        .build();
+        Ok(self.0.get(&path).await?.expect_json()?.data)
+    }
+
+    /// Restore a backup archive into a guest of a PVE remote.
+    pub async fn pve_restore_backup(
+        &self,
+        remote: &str,
+        request: &PveRestoreRequest,
+    ) -> Result<RemoteUpid, Error> {
+        let path = format!("/api2/extjs/pve/remotes/{remote}/restore");
+        Ok(self.0.post(&path, request).await?.expect_json()?.data)
     }
 
     pub async fn pve_list_replication_jobs(

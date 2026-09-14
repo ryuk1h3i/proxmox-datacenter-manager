@@ -1,5 +1,6 @@
 //! Streaming snapshot listing.
 
+use std::collections::HashMap;
 use std::rc::Rc;
 
 use anyhow::{Error, bail, format_err};
@@ -25,12 +26,18 @@ use pwt::{AsyncPool, css};
 
 use pbs_api_types::{BackupGroup, BackupNamespace, BackupType, SnapshotListItem, VerifyState};
 use pdm_api_types::pbs_jobs::{PbsSnapshotNotes, PbsSnapshotProtection, PbsSnapshotRef};
+use pdm_api_types::resource::{RemoteResources, Resource};
+use pdm_client::types::BackupGuestType;
 
 use proxmox_yew_comp::http_stream::Stream;
 
 use crate::locale_compare;
 use crate::pbs::namespace_selector::NamespaceSelector;
 use crate::renderer::render_tree_column;
+use crate::widget::{RestoreSource, RestoreWindow};
+
+/// Guest names of the PVE remotes, by backup group id (`vm/100`).
+type GuestNames = Rc<HashMap<String, Vec<String>>>;
 
 #[derive(Clone, PartialEq, Properties)]
 pub struct SnapshotList {
@@ -84,10 +91,13 @@ enum Msg {
     UpdateParentNamespace(Key),
     Reload,
     LoadFinished(Result<(), Error>),
+    GuestNames(Vec<RemoteResources>),
     VerifySelected,
     ToggleProtection,
     EditNotes,
     ForgetSelected,
+    RestoreSelected,
+    RestoreStarted(pdm_api_types::RemoteUpid),
     ActionFinished(Result<Option<pdm_api_types::RemoteUpid>, Error>),
     CloseDialog,
 }
@@ -96,7 +106,10 @@ enum Msg {
 enum DialogState {
     Notes(PbsSnapshotRef),
     Forget(PbsSnapshotRef),
+    Restore(PbsSnapshotRef, BackupGuestType),
     Task(pdm_api_types::RemoteUpid),
+    /// A restore task, which runs on the PVE remote instead of the backup server.
+    RestoreTask(pdm_api_types::RemoteUpid),
 }
 
 struct SnapshotListComp {
@@ -109,10 +122,14 @@ struct SnapshotListComp {
     current_namespace: BackupNamespace,
     interval: Option<Interval>,
     dialog: Option<DialogState>,
+    guest_names: GuestNames,
 }
 
 impl SnapshotListComp {
-    fn columns(store: TreeStore<SnapshotTreeEntry>) -> Rc<Vec<DataTableHeader<SnapshotTreeEntry>>> {
+    fn columns(
+        store: TreeStore<SnapshotTreeEntry>,
+        guest_names: GuestNames,
+    ) -> Rc<Vec<DataTableHeader<SnapshotTreeEntry>>> {
         Rc::new(vec![
             DataTableColumn::new(tr!("Backup Dir"))
                 .flex(1)
@@ -140,6 +157,23 @@ impl SnapshotListComp {
                     render_tree_column(Fa::new(icon).fixed_width().into(), res).into()
                 })
                 .into(),
+            DataTableColumn::new(tr!("Name"))
+                .flex(1)
+                .render(move |item: &SnapshotTreeEntry| {
+                    // the comment holds the name the guest had when the backup was taken
+                    let text = match item {
+                        SnapshotTreeEntry::Root(_) => String::new(),
+                        SnapshotTreeEntry::Group(group, _) => {
+                            current_name(&guest_names, &group.to_string())
+                        }
+                        SnapshotTreeEntry::Snapshot(entry) => match &entry.comment {
+                            Some(comment) if !comment.is_empty() => comment.clone(),
+                            _ => current_name(&guest_names, &entry.backup.group.to_string()),
+                        },
+                    };
+                    text.into()
+                })
+                .into(),
             DataTableColumn::new(tr!("Count"))
                 .justify("right")
                 .render(|item: &SnapshotTreeEntry| match item {
@@ -164,6 +198,16 @@ impl SnapshotListComp {
             .set_root(SnapshotTreeEntry::Root(self.current_namespace.clone()));
         self._async_pool = AsyncPool::new();
         self.reload(ctx);
+    }
+
+    /// The guest names are only used for decoration, so failures are ignored.
+    fn load_guest_names(&self, ctx: &PwtContext<Self>) {
+        let link = ctx.link().clone();
+        wasm_bindgen_futures::spawn_local(async move {
+            if let Ok(remotes) = crate::pdm_client().resources(None, None).await {
+                link.send_message(Msg::GuestNames(remotes));
+            }
+        });
     }
 
     fn reload(&mut self, ctx: &PwtContext<Self>) {
@@ -204,8 +248,9 @@ impl Component for SnapshotListComp {
 
         let selection = Selection::new().on_select(ctx.link().callback(|_| Msg::SelectionChange));
 
+        let guest_names: GuestNames = Rc::new(HashMap::new());
         let mut this = Self {
-            columns: Self::columns(store.clone()),
+            columns: Self::columns(store.clone(), guest_names.clone()),
             store,
             selection,
             _async_pool: AsyncPool::new(),
@@ -214,7 +259,9 @@ impl Component for SnapshotListComp {
             current_namespace: BackupNamespace::root(),
             interval: None,
             dialog: None,
+            guest_names,
         };
+        this.load_guest_names(ctx);
         this.reload(ctx);
         this
     }
@@ -300,6 +347,44 @@ impl Component for SnapshotListComp {
                 self.interval = None;
                 true
             }
+            Msg::GuestNames(remotes) => {
+                let mut names: HashMap<String, Vec<(String, String)>> = HashMap::new();
+                for RemoteResources {
+                    remote, resources, ..
+                } in remotes
+                {
+                    for resource in resources {
+                        let (group, name) = match resource {
+                            Resource::PveQemu(r) => (format!("vm/{}", r.vmid), r.name),
+                            Resource::PveLxc(r) => (format!("ct/{}", r.vmid), r.name),
+                            _ => continue,
+                        };
+                        if name.is_empty() {
+                            continue;
+                        }
+                        names.entry(group).or_default().push((remote.clone(), name));
+                    }
+                }
+
+                // a vmid is only unique per remote, so keep the remote when it is not
+                let names = names
+                    .into_iter()
+                    .map(|(group, entries)| {
+                        let labels = match entries.len() {
+                            1 => vec![entries[0].1.clone()],
+                            _ => entries
+                                .iter()
+                                .map(|(remote, name)| format!("{name} ({remote})"))
+                                .collect(),
+                        };
+                        (group, labels)
+                    })
+                    .collect();
+
+                self.guest_names = Rc::new(names);
+                self.columns = Self::columns(self.store.clone(), self.guest_names.clone());
+                true
+            }
             Msg::VerifySelected => {
                 let Some(snapshot) = self.selected_snapshot_ref() else { return false; };
                 let remote = ctx.props().remote.clone();
@@ -339,6 +424,19 @@ impl Component for SnapshotListComp {
                 self.dialog = self.selected_snapshot_ref().map(DialogState::Forget);
                 true
             }
+            Msg::RestoreSelected => {
+                self.dialog = match self.selected_guest_snapshot() {
+                    Some((snapshot, guest_type)) => {
+                        Some(DialogState::Restore(snapshot, guest_type))
+                    }
+                    None => None,
+                };
+                true
+            }
+            Msg::RestoreStarted(upid) => {
+                self.dialog = Some(DialogState::RestoreTask(upid));
+                true
+            }
             Msg::ActionFinished(result) => {
                 match result {
                     Ok(Some(upid)) => {
@@ -376,6 +474,7 @@ impl Component for SnapshotListComp {
         let loading = self.interval.is_some();
         let selected = self.selected_snapshot();
         let has_snapshot = selected.is_some();
+        let can_restore = self.selected_guest_snapshot().is_some();
         let protected = selected.as_ref().map(|(_, protected)| *protected).unwrap_or(false);
 
         let mut view = Column::new()
@@ -393,6 +492,7 @@ impl Component for SnapshotListComp {
             .with_child(
                 Toolbar::new()
                     .border_bottom(true)
+                    .with_child(Button::new(tr!("Restore")).icon_class("fa fa-undo").disabled(!can_restore).on_activate(link.callback(|_| Msg::RestoreSelected)))
                     .with_child(Button::new(tr!("Verify")).icon_class("fa fa-check-circle").disabled(!has_snapshot).on_activate(link.callback(|_| Msg::VerifySelected)))
                     .with_child(Button::new(if protected { tr!("Unprotect") } else { tr!("Protect") }).icon_class("fa fa-shield").disabled(!has_snapshot).on_activate(link.callback(|_| Msg::ToggleProtection)))
                     .with_child(Button::new(tr!("Notes")).icon_class("fa fa-sticky-note-o").disabled(!has_snapshot).on_activate(link.callback(|_| Msg::EditNotes)))
@@ -465,6 +565,31 @@ impl Component for SnapshotListComp {
                             .on_close(link.callback(|_| Msg::CloseDialog)),
                     );
                 }
+                DialogState::RestoreTask(upid) => {
+                    view.add_child(
+                        TaskViewer::new(upid.to_string())
+                            .base_url(format!("/pve/remotes/{}/tasks", upid.remote()))
+                            .on_close(link.callback(|_| Msg::CloseDialog)),
+                    );
+                }
+                DialogState::Restore(snapshot, guest_type) => {
+                    let source = RestoreSource::Pbs {
+                        remote: props.remote.clone(),
+                        datastore: props.datastore.clone(),
+                        namespace: snapshot.ns.clone(),
+                        backup_id: snapshot.backup_id.clone(),
+                        backup_time: snapshot.backup_time,
+                    };
+                    let vmid = snapshot.backup_id.parse().unwrap_or(100);
+                    let task_link = ctx.link().clone();
+                    view.add_child(
+                        RestoreWindow::new(source, *guest_type, vmid)
+                            .on_close(link.callback(|_| Msg::CloseDialog))
+                            .on_submit(move |upid| {
+                                task_link.send_message(Msg::RestoreStarted(upid))
+                            }),
+                    );
+                }
             }
         }
         view.into()
@@ -489,6 +614,25 @@ impl SnapshotListComp {
     fn selected_snapshot_ref(&self) -> Option<PbsSnapshotRef> {
         self.selected_snapshot().map(|(snapshot, _)| snapshot)
     }
+
+    /// The selected snapshot, if it holds a guest that PVE can restore.
+    fn selected_guest_snapshot(&self) -> Option<(PbsSnapshotRef, BackupGuestType)> {
+        let (snapshot, _) = self.selected_snapshot()?;
+        let guest_type = match snapshot.backup_type.as_str() {
+            "vm" => BackupGuestType::Vm,
+            "ct" => BackupGuestType::Ct,
+            _ => return None,
+        };
+        Some((snapshot, guest_type))
+    }
+}
+
+/// Name the guest of a backup group currently has, if PDM knows it.
+fn current_name(names: &GuestNames, group: &str) -> String {
+    names
+        .get(group)
+        .map(|names| names.join(", "))
+        .unwrap_or_default()
 }
 
 async fn list_snapshots(
