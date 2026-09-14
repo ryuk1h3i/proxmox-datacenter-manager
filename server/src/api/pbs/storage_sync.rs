@@ -7,7 +7,7 @@
 use anyhow::{Error, bail, format_err};
 use serde_json::{Value, json};
 
-use proxmox_client::HttpApiClient;
+use proxmox_client::{HttpApiClient, HttpApiResponse};
 use proxmox_router::{Permission, Router};
 use proxmox_schema::api;
 
@@ -100,6 +100,15 @@ pub(crate) async fn list_pve_storages(remote: &str) -> Result<Vec<Value>, Error>
         Value::Array(storages) => Ok(storages),
         _ => bail!("unexpected response from the storage endpoint"),
     }
+}
+
+/// Check a response whose payload is not used.
+///
+/// PVE answers storage changes with the new storage configuration, so `nodata()`
+/// would reject a perfectly fine response.
+fn check_response(response: HttpApiResponse) -> Result<(), Error> {
+    response.expect_json::<Value>()?;
+    Ok(())
 }
 
 /// Find a `pbs` storage pointing at the given server and, if given, datastore.
@@ -309,7 +318,7 @@ async fn attach_to_single_remote(
         }
         apply_encryption(&mut payload, request, true);
         let path = format!("/api2/extjs/storage/{storage}");
-        client.put(&path, &payload).await?.nodata()?;
+        check_response(client.put(&path, &payload).await?)?;
         return Ok((true, format!("updated existing storage '{storage}'")));
     }
 
@@ -333,10 +342,7 @@ async fn attach_to_single_remote(
     apply_encryption(&mut payload, request, false);
     payload["storage"] = storage.into();
     payload["type"] = "pbs".into();
-    client
-        .post("/api2/extjs/storage", &payload)
-        .await?
-        .nodata()?;
+    check_response(client.post("/api2/extjs/storage", &payload).await?)?;
 
     Ok((true, format!("created storage '{storage}'")))
 }

@@ -11,9 +11,11 @@ use pwt::css::{AlignItems, FlexFit};
 use pwt::prelude::*;
 use pwt::props::{ContainerBuilder, ExtractPrimaryKey, FieldBuilder, WidgetBuilder};
 use pwt::state::{Selection, Store};
-use pwt::widget::data_table::{DataTable, DataTableColumn, DataTableHeader, MultiSelectMode};
+use pwt::widget::data_table::{
+    DataTable, DataTableColumn, DataTableHeader, DataTableMouseEvent, MultiSelectMode,
+};
 use pwt::widget::form::{Checkbox, Field};
-use pwt::widget::{Button, Column, Container, Dialog, Row, Toolbar, error_message};
+use pwt::widget::{AlertDialog, Button, Column, Container, Dialog, Row, Toolbar, error_message};
 use pwt_macros::builder;
 
 use pdm_client::types::{PbsAttachRequest, PbsAttachResult, PbsPveStorageState};
@@ -86,6 +88,7 @@ pub enum Msg {
     SetRemoveEncryption(bool),
     Apply,
     Applied(Result<Vec<PbsAttachResult>, String>),
+    ShowDetail(Option<String>),
     SelectionChange,
 }
 
@@ -105,6 +108,8 @@ pub struct AttachPbsStorageComp {
     selection: Selection,
     columns: Rc<Vec<DataTableHeader<RemoteRow>>>,
     error: Option<String>,
+    /// Full text of the message shown in the foreground alert.
+    detail: Option<String>,
     busy: bool,
     done: bool,
     async_pool: AsyncPool,
@@ -172,6 +177,7 @@ impl Component for AttachPbsStorageComp {
             selection,
             columns: columns(),
             error: None,
+            detail: None,
             busy: false,
             done: false,
             async_pool: AsyncPool::new(),
@@ -302,22 +308,34 @@ impl Component for AttachPbsStorageComp {
             }
             Msg::Applied(Err(err)) => {
                 self.busy = false;
-                self.error = Some(err);
+                self.error = Some(err.clone());
+                self.detail = Some(err);
             }
             Msg::Applied(Ok(results)) => {
                 self.busy = false;
                 self.done = true;
-                let mut store = self.store.write();
-                for result in results {
-                    if let Some(row) = store.iter_mut().find(|row| row.remote == result.remote) {
-                        row.outcome = Some(match &result.error {
-                            Some(err) => err.clone(),
-                            None => result.message.clone(),
-                        });
-                        row.error = result.error.clone();
+                let mut failed = Vec::new();
+                {
+                    let mut store = self.store.write();
+                    for result in results {
+                        if let Some(err) = &result.error {
+                            failed.push(format!("{}: {err}", result.remote));
+                        }
+                        if let Some(row) = store.iter_mut().find(|row| row.remote == result.remote) {
+                            row.outcome = Some(match &result.error {
+                                Some(err) => err.clone(),
+                                None => result.message.clone(),
+                            });
+                            row.error = result.error.clone();
+                        }
                     }
                 }
+                self.detail = match failed.is_empty() {
+                    true => None,
+                    false => Some(failed.join("\n\n")),
+                };
             }
+            Msg::ShowDetail(detail) => self.detail = detail,
             Msg::SelectionChange => {}
         }
         true
@@ -434,10 +452,23 @@ impl Component for AttachPbsStorageComp {
                     .selection(self.selection.clone())
                     .multiselect_mode(MultiSelectMode::Simple)
                     .border(true)
-                    .class(FlexFit),
+                    .class(FlexFit)
+                    .on_row_dblclick({
+                        let link = ctx.link().clone();
+                        let store = self.store.clone();
+                        move |event: &mut DataTableMouseEvent| {
+                            let text = store
+                                .read()
+                                .lookup_record(&event.record_key)
+                                .and_then(|row| {
+                                    row.error.clone().or_else(|| row.outcome.clone())
+                                });
+                            link.send_message(Msg::ShowDetail(text));
+                        }
+                    }),
             );
 
-        Dialog::new(tr!("Add backup storage to PVE remotes"))
+        let dialog = Dialog::new(tr!("Add backup storage to PVE remotes"))
             .resizable(true)
             .width(760)
             .height(640)
@@ -466,8 +497,21 @@ impl Component for AttachPbsStorageComp {
                                 move |_| link.send_message(Msg::Apply)
                             }),
                     ),
-            )
-            .into()
+            );
+
+        let detail = match &self.detail {
+            Some(detail) => AlertDialog::new(detail.clone())
+                .on_close(ctx.link().callback(|_| Msg::ShowDetail(None)))
+                .into(),
+            None => html! {},
+        };
+
+        html! {
+            <>
+                {dialog}
+                {detail}
+            </>
+        }
     }
 }
 
