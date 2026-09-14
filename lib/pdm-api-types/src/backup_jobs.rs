@@ -135,6 +135,11 @@ pub struct BackupJobConfig {
     #[updater(serde(skip_serializing_if = "Option::is_none"))]
     pub pbs_remote: Option<String>,
 
+    /// Datastore of that PBS remote, required when it serves more than one.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    #[updater(serde(skip_serializing_if = "Option::is_none"))]
+    pub pbs_datastore: Option<String>,
+
     /// Storage used on every remote without an explicit target override.
     #[serde(skip_serializing_if = "Option::is_none")]
     #[updater(serde(skip_serializing_if = "Option::is_none"))]
@@ -209,6 +214,11 @@ impl BackupJobConfig {
             .find(|target| target.remote == remote)
             .map(|target| target.storage.as_str())
             .or(self.default_storage.as_deref())
+    }
+
+    /// Whether the job knows where its backups have to be written to.
+    pub fn has_target(&self) -> bool {
+        self.pbs_remote.is_some() || self.default_storage.is_some() || !self.targets.is_empty()
     }
 
     /// Whether guests migrated to another remote should be tracked by vmid.

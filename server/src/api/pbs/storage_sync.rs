@@ -11,9 +11,9 @@ use proxmox_client::HttpApiClient;
 use proxmox_router::{Permission, Router};
 use proxmox_schema::api;
 
-use pdm_api_types::pbs::{PbsAttachResult, PbsPveStorageState};
+use pdm_api_types::pbs::{PbsAttachRequest, PbsAttachResult, PbsPveStorageState};
 use pdm_api_types::remotes::{REMOTE_ID_SCHEMA, RemoteType};
-use pdm_api_types::{PRIV_RESOURCE_AUDIT, PRIV_RESOURCE_MANAGE, PVE_STORAGE_ID_SCHEMA};
+use pdm_api_types::{PRIV_RESOURCE_AUDIT, PRIV_RESOURCE_MANAGE};
 
 pub const ROUTER: Router = Router::new()
     .get(&API_METHOD_PVE_STORAGE_STATE)
@@ -37,15 +37,15 @@ fn split_host_port(hostname: &str) -> (String, Option<u16>) {
     (hostname.to_string(), None)
 }
 
-struct PbsConnectionInfo {
-    server: String,
+pub(crate) struct PbsConnectionInfo {
+    pub server: String,
     port: Option<u16>,
     fingerprint: Option<String>,
     username: String,
     password: String,
 }
 
-fn pbs_connection_info(remote: &str) -> Result<PbsConnectionInfo, Error> {
+pub(crate) fn pbs_connection_info(remote: &str) -> Result<PbsConnectionInfo, Error> {
     let (remotes, _) = pdm_config::remotes::config()?;
     let entry = crate::pbs_client::get_remote(&remotes, remote)?;
 
@@ -89,7 +89,7 @@ fn pve_remote_ids(selection: Option<Vec<String>>) -> Result<Vec<String>, Error> 
     })
 }
 
-async fn list_pve_storages(remote: &str) -> Result<Vec<Value>, Error> {
+pub(crate) async fn list_pve_storages(remote: &str) -> Result<Vec<Value>, Error> {
     let client = crate::api::pve::raw_client_to_remote_by_id(remote)?;
     let data: Value = client
         .get("/api2/extjs/storage")
@@ -102,15 +102,20 @@ async fn list_pve_storages(remote: &str) -> Result<Vec<Value>, Error> {
     }
 }
 
-/// Find a `pbs` storage pointing at the given server and datastore.
-fn find_matching_storage<'a>(
+/// Find a `pbs` storage pointing at the given server and, if given, datastore.
+pub(crate) fn find_matching_storage<'a>(
     storages: &'a [Value],
     server: &str,
-    datastore: &str,
+    datastore: Option<&str>,
 ) -> Option<&'a Value> {
     storages.iter().find(|storage| {
         storage.get("type").and_then(Value::as_str) == Some("pbs")
-            && storage.get("datastore").and_then(Value::as_str) == Some(datastore)
+            && match datastore {
+                Some(datastore) => {
+                    storage.get("datastore").and_then(Value::as_str) == Some(datastore)
+                }
+                None => true,
+            }
             && storage
                 .get("server")
                 .and_then(Value::as_str)
@@ -118,10 +123,18 @@ fn find_matching_storage<'a>(
     })
 }
 
-fn find_storage_by_id<'a>(storages: &'a [Value], id: &str) -> Option<&'a Value> {
+pub(crate) fn find_storage_by_id<'a>(storages: &'a [Value], id: &str) -> Option<&'a Value> {
     storages
         .iter()
         .find(|storage| storage.get("storage").and_then(Value::as_str) == Some(id))
+}
+
+fn storage_string(storage: &Value, key: &str) -> Option<String> {
+    storage
+        .get(key)
+        .and_then(Value::as_str)
+        .map(str::to_owned)
+        .filter(|value| !value.is_empty())
 }
 
 #[api(
@@ -152,15 +165,20 @@ pub async fn pve_storage_state(
         let mut state = PbsPveStorageState {
             remote: pve_remote.clone(),
             storage: None,
+            namespace: None,
+            encryption_key: None,
             error: None,
         };
 
         match list_pve_storages(&pve_remote).await {
             Ok(storages) => {
-                state.storage = find_matching_storage(&storages, &info.server, &datastore)
-                    .and_then(|storage| storage.get("storage"))
-                    .and_then(Value::as_str)
-                    .map(str::to_owned);
+                if let Some(found) =
+                    find_matching_storage(&storages, &info.server, Some(&datastore))
+                {
+                    state.storage = storage_string(found, "storage");
+                    state.namespace = storage_string(found, "namespace");
+                    state.encryption_key = storage_string(found, "encryption-key");
+                }
             }
             Err(err) => state.error = Some(format!("{err:#}")),
         }
@@ -175,14 +193,7 @@ pub async fn pve_storage_state(
     input: {
         properties: {
             remote: { schema: REMOTE_ID_SCHEMA },
-            datastore: { type: String, description: "The PBS datastore to attach." },
-            storage: { schema: PVE_STORAGE_ID_SCHEMA },
-            "pve-remotes": {
-                description: "PVE remotes to configure, defaults to all of them.",
-                type: Array,
-                optional: true,
-                items: { schema: REMOTE_ID_SCHEMA },
-            },
+            request: { type: PbsAttachRequest, flatten: true },
         },
     },
     returns: {
@@ -197,15 +208,17 @@ pub async fn pve_storage_state(
 /// Configure this PBS datastore as a storage on the selected PVE remotes.
 pub async fn attach_to_pve(
     remote: String,
-    datastore: String,
-    storage: String,
-    pve_remotes: Option<Vec<String>>,
+    request: PbsAttachRequest,
 ) -> Result<Vec<PbsAttachResult>, Error> {
     let info = pbs_connection_info(&remote)?;
 
+    if request.remove_encryption == Some(true) && request.encryption_key.is_some() {
+        bail!("cannot set and remove the encryption key at the same time");
+    }
+
     let mut base = json!({
         "server": info.server,
-        "datastore": datastore,
+        "datastore": request.datastore,
         "username": info.username,
         "password": info.password,
     });
@@ -216,9 +229,14 @@ pub async fn attach_to_pve(
         base["fingerprint"] = fingerprint.clone().into();
     }
 
+    let pve_remotes = match request.pve_remotes.is_empty() {
+        true => None,
+        false => Some(request.pve_remotes.clone()),
+    };
+
     let mut result = Vec::new();
     for pve_remote in pve_remote_ids(pve_remotes)? {
-        let outcome = attach_to_single_remote(&pve_remote, &storage, &datastore, &info, &base).await;
+        let outcome = attach_to_single_remote(&pve_remote, &request, &info, &base).await;
 
         result.push(match outcome {
             Ok((changed, message)) => PbsAttachResult {
@@ -239,17 +257,45 @@ pub async fn attach_to_pve(
     Ok(result)
 }
 
+/// Add the encryption related properties to a create or update payload.
+fn apply_encryption(payload: &mut Value, request: &PbsAttachRequest, updating: bool) {
+    if let Some(key) = &request.encryption_key {
+        payload["encryption-key"] = key.clone().into();
+        if let Some(master_pubkey) = &request.master_pubkey {
+            payload["master-pubkey"] = master_pubkey.clone().into();
+        }
+    } else if updating && request.remove_encryption == Some(true) {
+        payload["delete"] = "encryption-key,master-pubkey".into();
+    }
+}
+
 async fn attach_to_single_remote(
     pve_remote: &str,
-    storage: &str,
-    datastore: &str,
+    request: &PbsAttachRequest,
     info: &PbsConnectionInfo,
     base: &Value,
 ) -> Result<(bool, String), Error> {
+    let storage = request.storage.as_str();
     let storages = list_pve_storages(pve_remote).await?;
     let client = crate::api::pve::raw_client_to_remote_by_id(pve_remote)?;
 
-    if find_storage_by_id(&storages, storage).is_some() {
+    if let Some(existing) = find_storage_by_id(&storages, storage) {
+        // never touch a storage that belongs to something else
+        if existing.get("type").and_then(Value::as_str) != Some("pbs") {
+            bail!("storage '{storage}' on '{pve_remote}' is not a backup server storage");
+        }
+        let same_server = existing
+            .get("server")
+            .and_then(Value::as_str)
+            .is_some_and(|value| value.eq_ignore_ascii_case(&info.server));
+        let same_datastore =
+            existing.get("datastore").and_then(Value::as_str) == Some(request.datastore.as_str());
+        if !same_server || !same_datastore {
+            bail!(
+                "storage '{storage}' on '{pve_remote}' points at another backup server or datastore"
+            );
+        }
+
         // only refresh the parts that may legitimately change
         let mut payload = json!({
             "username": info.username,
@@ -258,12 +304,18 @@ async fn attach_to_single_remote(
         if let Some(fingerprint) = &info.fingerprint {
             payload["fingerprint"] = fingerprint.clone().into();
         }
+        if let Some(namespace) = &request.namespace {
+            payload["namespace"] = namespace.clone().into();
+        }
+        apply_encryption(&mut payload, request, true);
         let path = format!("/api2/extjs/storage/{storage}");
         client.put(&path, &payload).await?.nodata()?;
         return Ok((true, format!("updated existing storage '{storage}'")));
     }
 
-    if let Some(existing) = find_matching_storage(&storages, &info.server, datastore) {
+    if let Some(existing) =
+        find_matching_storage(&storages, &info.server, Some(&request.datastore))
+    {
         let id = existing
             .get("storage")
             .and_then(Value::as_str)
@@ -275,6 +327,10 @@ async fn attach_to_single_remote(
     }
 
     let mut payload = base.clone();
+    if let Some(namespace) = &request.namespace {
+        payload["namespace"] = namespace.clone().into();
+    }
+    apply_encryption(&mut payload, request, false);
     payload["storage"] = storage.into();
     payload["type"] = "pbs".into();
     client

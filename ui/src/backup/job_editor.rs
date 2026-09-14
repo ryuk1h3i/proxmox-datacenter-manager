@@ -24,6 +24,7 @@ use crate::widget::RemoteSelector;
 const OPTIONAL_PROPERTIES: &[&str] = &[
     "comment",
     "pbs-remote",
+    "pbs-datastore",
     "default-storage",
     "mode",
     "compress",
@@ -267,10 +268,18 @@ fn render_panel(id: Option<String>) -> Html {
                 .remote_type(RemoteType::Pbs),
         )
         .with_right_field(
+            tr!("Datastore"),
+            Field::new()
+                .name("pbs-datastore")
+                .placeholder(tr!("datastore of the backup server")),
+        )
+        .with_large_field(
             tr!("Storage on the PVE remotes"),
             Field::new()
                 .name("default-storage")
-                .placeholder(tr!("storage ID, identical on every remote")),
+                .placeholder(tr!(
+                    "leave empty to use the storage that points at the backup server"
+                )),
         )
         .with_field(
             tr!("Mode"),

@@ -23,7 +23,7 @@ use crate::remote_tasks;
 mod node;
 mod maintenance;
 mod rrddata;
-mod storage_sync;
+pub(crate) mod storage_sync;
 pub mod tasks;
 
 pub const ROUTER: Router = Router::new()

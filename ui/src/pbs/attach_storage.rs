@@ -9,14 +9,14 @@ use yew::virtual_dom::{Key, VComp, VNode};
 use pwt::AsyncPool;
 use pwt::css::{AlignItems, FlexFit};
 use pwt::prelude::*;
-use pwt::props::{ContainerBuilder, ExtractPrimaryKey, WidgetBuilder};
+use pwt::props::{ContainerBuilder, ExtractPrimaryKey, FieldBuilder, WidgetBuilder};
 use pwt::state::{Selection, Store};
 use pwt::widget::data_table::{DataTable, DataTableColumn, DataTableHeader, MultiSelectMode};
-use pwt::widget::form::Field;
+use pwt::widget::form::{Checkbox, Field};
 use pwt::widget::{Button, Column, Container, Dialog, Row, Toolbar, error_message};
 use pwt_macros::builder;
 
-use pdm_client::types::{PbsAttachResult, PbsPveStorageState};
+use pdm_client::types::{PbsAttachRequest, PbsAttachResult, PbsPveStorageState};
 
 /// One datastore of the PBS remote.
 #[derive(Clone, PartialEq)]
@@ -35,6 +35,8 @@ impl ExtractPrimaryKey for DatastoreRow {
 struct RemoteRow {
     remote: String,
     existing: Option<String>,
+    namespace: Option<String>,
+    encryption_key: Option<String>,
     error: Option<String>,
     outcome: Option<String>,
 }
@@ -77,6 +79,11 @@ pub enum Msg {
     SelectDatastore,
     StateLoaded(Result<Vec<PbsPveStorageState>, String>),
     SetStorage(String),
+    SetNamespace(String),
+    SetEncrypt(bool),
+    SetEncryptionKey(String),
+    SetMasterPubkey(String),
+    SetRemoveEncryption(bool),
     Apply,
     Applied(Result<Vec<PbsAttachResult>, String>),
     SelectionChange,
@@ -89,6 +96,11 @@ pub struct AttachPbsStorageComp {
     /// Stays false until the datastore list came back, so an empty list can be reported.
     datastores_loaded: bool,
     storage: String,
+    namespace: String,
+    encrypt: bool,
+    encryption_key: String,
+    master_pubkey: String,
+    remove_encryption: bool,
     store: Store<RemoteRow>,
     selection: Selection,
     columns: Rc<Vec<DataTableHeader<RemoteRow>>>,
@@ -151,6 +163,11 @@ impl Component for AttachPbsStorageComp {
             datastore_columns: datastore_columns(),
             datastores_loaded: false,
             storage: String::new(),
+            namespace: String::new(),
+            encrypt: false,
+            encryption_key: String::new(),
+            master_pubkey: String::new(),
+            remove_encryption: false,
             store: Store::with_extract_key(|row: &RemoteRow| row.extract_key()),
             selection,
             columns: columns(),
@@ -203,6 +220,8 @@ impl Component for AttachPbsStorageComp {
                     .map(|state| RemoteRow {
                         remote: state.remote,
                         existing: state.storage,
+                        namespace: state.namespace,
+                        encryption_key: state.encryption_key,
                         error: state.error,
                         outcome: None,
                     })
@@ -212,6 +231,21 @@ impl Component for AttachPbsStorageComp {
                 self.selection.bulk_select(keys);
             }
             Msg::SetStorage(value) => self.storage = value,
+            Msg::SetNamespace(value) => self.namespace = value,
+            Msg::SetEncrypt(value) => {
+                self.encrypt = value;
+                if value {
+                    self.remove_encryption = false;
+                }
+            }
+            Msg::SetEncryptionKey(value) => self.encryption_key = value,
+            Msg::SetMasterPubkey(value) => self.master_pubkey = value,
+            Msg::SetRemoveEncryption(value) => {
+                self.remove_encryption = value;
+                if value {
+                    self.encrypt = false;
+                }
+            }
             Msg::Apply => {
                 let (Some(datastore), false) = (self.selected_datastore(), self.storage.is_empty())
                 else {
@@ -233,11 +267,34 @@ impl Component for AttachPbsStorageComp {
                 self.error = None;
 
                 let remote = ctx.props().remote.clone();
-                let storage = self.storage.clone();
+                let mut request = PbsAttachRequest {
+                    datastore,
+                    storage: self.storage.clone(),
+                    pve_remotes: remotes,
+                    ..Default::default()
+                };
+                let namespace = self.namespace.trim();
+                if !namespace.is_empty() {
+                    request.namespace = Some(namespace.to_string());
+                }
+                if self.encrypt {
+                    let key = self.encryption_key.trim();
+                    request.encryption_key = Some(match key.is_empty() {
+                        true => "autogen".to_string(),
+                        false => key.to_string(),
+                    });
+                    let master_pubkey = self.master_pubkey.trim();
+                    if !master_pubkey.is_empty() {
+                        request.master_pubkey = Some(master_pubkey.to_string());
+                    }
+                } else if self.remove_encryption {
+                    request.remove_encryption = Some(true);
+                }
+
                 let link = ctx.link().clone();
                 self.async_pool.spawn(async move {
                     let result = crate::pdm_client()
-                        .pbs_attach_storage_to_pve(&remote, &datastore, &storage, Some(&remotes))
+                        .pbs_attach_storage_to_pve(&remote, &request)
                         .await
                         .map_err(|err| err.to_string());
                     link.send_message(Msg::Applied(result));
@@ -318,8 +375,55 @@ impl Component for AttachPbsStorageComp {
                         Field::new()
                             .value(self.storage.clone())
                             .on_input(link.callback(Msg::SetStorage)),
+                    )
+                    .with_child(Container::new().with_child(tr!("Namespace")))
+                    .with_child(
+                        Field::new()
+                            .value(self.namespace.clone())
+                            .placeholder(tr!("root namespace"))
+                            .on_input(link.callback(Msg::SetNamespace)),
                     ),
             )
+            .with_child(
+                Row::new()
+                    .gap(2)
+                    .class(AlignItems::Center)
+                    .with_child(
+                        Checkbox::new()
+                            .box_label(tr!("Encrypt backups"))
+                            .checked(self.encrypt)
+                            .on_change(link.callback(Msg::SetEncrypt)),
+                    )
+                    .with_child(
+                        Field::new()
+                            .disabled(!self.encrypt)
+                            .value(self.encryption_key.clone())
+                            .placeholder(tr!("encryption key, empty generates a new one"))
+                            .on_input(link.callback(Msg::SetEncryptionKey)),
+                    )
+                    .with_child(
+                        Field::new()
+                            .disabled(!self.encrypt)
+                            .value(self.master_pubkey.clone())
+                            .placeholder(tr!("master public key (base64, optional)"))
+                            .on_input(link.callback(Msg::SetMasterPubkey)),
+                    ),
+            )
+            .with_child(
+                Row::new()
+                    .gap(2)
+                    .class(AlignItems::Center)
+                    .with_child(
+                        Checkbox::new()
+                            .box_label(tr!("Remove the encryption key of existing storages"))
+                            .checked(self.remove_encryption)
+                            .on_change(link.callback(Msg::SetRemoveEncryption)),
+                    ),
+            )
+            .with_child(Container::new().with_child(tr!(
+                "A generated encryption key is only stored on the PVE remote. Without a backup of \
+                 that key the encrypted backups cannot be restored anymore."
+            )))
             .with_child(Container::new().with_child(tr!(
                 "The API token of the backup server is written into the storage configuration of \
                  every selected PVE remote. It needs the 'Datastore.Backup' privilege on the \
@@ -386,6 +490,17 @@ fn columns() -> Rc<Vec<DataTableHeader<RemoteRow>>> {
         DataTableColumn::new(tr!("Existing storage"))
             .flex(1)
             .get_property_owned(|row: &RemoteRow| row.existing.clone().unwrap_or_default())
+            .into(),
+        DataTableColumn::new(tr!("Namespace"))
+            .flex(1)
+            .get_property_owned(|row: &RemoteRow| row.namespace.clone().unwrap_or_default())
+            .into(),
+        DataTableColumn::new(tr!("Encrypted"))
+            .flex(1)
+            .get_property_owned(|row: &RemoteRow| match &row.encryption_key {
+                Some(fingerprint) => fingerprint.clone(),
+                None => String::new(),
+            })
             .into(),
         DataTableColumn::new(tr!("Result"))
             .flex(2)

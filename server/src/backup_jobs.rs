@@ -18,6 +18,9 @@ use pdm_api_types::backup_jobs::{
 };
 use pdm_api_types::remotes::RemoteType;
 
+use crate::api::pbs::storage_sync::{
+    find_matching_storage, find_storage_by_id, list_pve_storages, pbs_connection_info,
+};
 use crate::api::pve::{new_remote_upid, raw_client_to_remote_by_id};
 use crate::api::resources::{CachedGuest, cached_pve_guests};
 
@@ -120,7 +123,7 @@ pub async fn build_plan(job: &BackupJobConfig) -> Result<JobPlan, Error> {
 }
 
 /// Build the `cluster/backup` payload for one remote.
-fn desired_payload(job: &BackupJobConfig, plan: &RemotePlan) -> Value {
+fn desired_payload(job: &BackupJobConfig, plan: &RemotePlan, storage: &str) -> Value {
     let vmid = plan
         .vmids
         .iter()
@@ -130,15 +133,13 @@ fn desired_payload(job: &BackupJobConfig, plan: &RemotePlan) -> Value {
 
     let mut payload = json!({
         "vmid": vmid,
+        "storage": storage,
         "enabled": if job.disable.unwrap_or(false) { 0 } else { 1 },
         "comment": job.comment.clone().unwrap_or_else(|| format!("PDM job '{}'", job.id)),
     });
 
     if !job.schedule.is_empty() {
         payload["schedule"] = job.schedule.clone().into();
-    }
-    if let Some(storage) = &plan.storage {
-        payload["storage"] = storage.clone().into();
     }
     for (key, value) in [
         ("mode", &job.mode),
@@ -234,6 +235,55 @@ fn encode_id(id: &str) -> String {
     percent_encoding::percent_encode(id.as_bytes(), percent_encoding::NON_ALPHANUMERIC).to_string()
 }
 
+/// Whether a PVE storage accepts `backup` content.
+fn allows_backups(storage: &Value) -> bool {
+    match storage.get("content").and_then(Value::as_str) {
+        Some(content) => content.split(',').any(|entry| entry.trim() == "backup"),
+        None => true,
+    }
+}
+
+/// Resolve the storage a job has to write to on the given remote.
+///
+/// PVE silently falls back to its default dump storage when `storage` is
+/// omitted, which is how a job targeting a Proxmox Backup Server can report
+/// success while nothing ever reaches the backup server. An unresolvable target
+/// is therefore treated as an error.
+async fn resolve_storage(remote: &str, job: &BackupJobConfig) -> Result<String, Error> {
+    let storages = list_pve_storages(remote).await?;
+
+    if let Some(configured) = job.storage_for(remote) {
+        let entry = find_storage_by_id(&storages, configured).ok_or_else(|| {
+            format_err!("storage '{configured}' does not exist on remote '{remote}'")
+        })?;
+        if !allows_backups(entry) {
+            bail!("storage '{configured}' on remote '{remote}' does not hold backup content");
+        }
+        return Ok(configured.to_string());
+    }
+
+    let pbs_remote = job.pbs_remote.as_deref().ok_or_else(|| {
+        format_err!(
+            "backup job '{}' has no target: select a backup server or a storage for remote \
+             '{remote}'",
+            job.id
+        )
+    })?;
+
+    let info = pbs_connection_info(pbs_remote)?;
+    let storage = find_matching_storage(&storages, &info.server, job.pbs_datastore.as_deref())
+        .and_then(|storage| storage.get("storage"))
+        .and_then(Value::as_str)
+        .ok_or_else(|| {
+            format_err!(
+                "remote '{remote}' has no storage for the backup server '{pbs_remote}', add it \
+                 first"
+            )
+        })?;
+
+    Ok(storage.to_string())
+}
+
 /// Read the `cluster/backup` job list of a remote as raw JSON.
 ///
 /// Raw values are used on purpose: PVE is inconsistent about the types of its
@@ -260,10 +310,11 @@ async fn apply_on_remote(
     remote: &str,
     job: &BackupJobConfig,
     plan: &RemotePlan,
-) -> Result<BackupJobSyncState, Error> {
+) -> Result<String, Error> {
+    let storage = resolve_storage(remote, job).await?;
     let derived_id = derived_job_id(&job.id);
     let jobs = list_remote_jobs(remote).await?;
-    let mut payload = desired_payload(job, plan);
+    let mut payload = desired_payload(job, plan, &storage);
 
     let client = raw_client_to_remote_by_id(remote)?;
     if find_job(&jobs, &derived_id).is_some() {
@@ -279,7 +330,7 @@ async fn apply_on_remote(
             .nodata()?;
     }
 
-    Ok(BackupJobSyncState::Synced)
+    Ok(storage)
 }
 
 async fn remove_on_remote(remote: &str, job_id: &str) -> Result<(), Error> {
@@ -305,16 +356,21 @@ pub async fn sync_job(job: &BackupJobConfig) -> Result<Vec<BackupJobRemoteStatus
     for remote in pve_remote_ids()? {
         match plan.get(&remote) {
             Some(remote_plan) => {
-                let (state, error) = match apply_on_remote(&remote, job, remote_plan).await {
-                    Ok(state) => (state, None),
-                    Err(err) => (BackupJobSyncState::Error, Some(format!("{err:#}"))),
+                let (state, storage, error) = match apply_on_remote(&remote, job, remote_plan).await
+                {
+                    Ok(storage) => (BackupJobSyncState::Synced, Some(storage), None),
+                    Err(err) => (
+                        BackupJobSyncState::Error,
+                        remote_plan.storage.clone(),
+                        Some(format!("{err:#}")),
+                    ),
                 };
                 status.push(BackupJobRemoteStatus {
                     remote: remote.clone(),
                     job_id: derived_id.clone(),
                     state,
                     guest_count: remote_plan.vmids.len() as u32,
-                    storage: remote_plan.storage.clone(),
+                    storage,
                     error,
                 });
             }
@@ -361,14 +417,26 @@ pub async fn job_status(job: &BackupJobConfig) -> Result<Vec<BackupJobRemoteStat
             error: None,
         };
 
-        match list_remote_jobs(remote).await {
-            Ok(jobs) => {
-                if let Some(existing) = find_job(&jobs, &derived_id) {
-                    entry.state = if is_in_sync(existing, &desired_payload(job, remote_plan)) {
-                        BackupJobSyncState::Synced
-                    } else {
-                        BackupJobSyncState::OutOfSync
-                    };
+        match resolve_storage(remote, job).await {
+            Ok(storage) => {
+                entry.storage = Some(storage.clone());
+
+                match list_remote_jobs(remote).await {
+                    Ok(jobs) => {
+                        if let Some(existing) = find_job(&jobs, &derived_id) {
+                            entry.state =
+                                if is_in_sync(existing, &desired_payload(job, remote_plan, &storage))
+                                {
+                                    BackupJobSyncState::Synced
+                                } else {
+                                    BackupJobSyncState::OutOfSync
+                                };
+                        }
+                    }
+                    Err(err) => {
+                        entry.state = BackupJobSyncState::Error;
+                        entry.error = Some(format!("{err:#}"));
+                    }
                 }
             }
             Err(err) => {
@@ -413,6 +481,14 @@ pub async fn run_job(job: &BackupJobConfig) -> Result<Vec<RemoteUpid>, Error> {
     let mut errors = Vec::new();
 
     for (remote, remote_plan) in &plan {
+        let storage = match resolve_storage(remote, job).await {
+            Ok(storage) => storage,
+            Err(err) => {
+                errors.push(format!("{remote}: {err:#}"));
+                continue;
+            }
+        };
+
         let mut per_node: BTreeMap<String, Vec<u32>> = BTreeMap::new();
         for vmid in &remote_plan.vmids {
             let node = remote_plan
@@ -425,10 +501,8 @@ pub async fn run_job(job: &BackupJobConfig) -> Result<Vec<RemoteUpid>, Error> {
         for (node, vmids) in per_node {
             let mut payload = json!({
                 "vmid": vmids.iter().map(u32::to_string).collect::<Vec<_>>().join(","),
+                "storage": storage,
             });
-            if let Some(storage) = &remote_plan.storage {
-                payload["storage"] = storage.clone().into();
-            }
             for (key, value) in [
                 ("mode", &job.mode),
                 ("compress", &job.compress),

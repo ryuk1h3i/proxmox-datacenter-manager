@@ -71,9 +71,51 @@ pub struct PbsPveStorageState {
     /// ID of the storage pointing at the datastore, if there is one.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub storage: Option<String>,
+    /// Namespace the existing storage writes into.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub namespace: Option<String>,
+    /// Fingerprint of the client encryption key of the existing storage.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub encryption_key: Option<String>,
     /// Error encountered while querying the remote.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub error: Option<String>,
+}
+
+#[api(
+    properties: {
+        storage: { schema: crate::PVE_STORAGE_ID_SCHEMA },
+        "pve-remotes": {
+            description: "PVE remotes to configure, defaults to all of them.",
+            type: Array,
+            optional: true,
+            items: { schema: crate::remotes::REMOTE_ID_SCHEMA },
+        },
+    },
+)]
+/// Parameters for attaching a PBS datastore as a storage to the PVE remotes.
+#[derive(Clone, Debug, Default, Deserialize, Serialize, PartialEq)]
+#[serde(rename_all = "kebab-case")]
+pub struct PbsAttachRequest {
+    /// The PBS datastore to attach.
+    pub datastore: String,
+    /// Storage ID to use on the PVE remotes.
+    pub storage: String,
+    /// PVE remotes to configure, defaults to all of them.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub pve_remotes: Vec<String>,
+    /// Namespace inside the datastore the backups are written to.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub namespace: Option<String>,
+    /// Client encryption key, or 'autogen' to let PVE create a new one.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub encryption_key: Option<String>,
+    /// RSA master public key (base64 encoded PEM) used to wrap the encryption key.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub master_pubkey: Option<String>,
+    /// Drop the encryption key of an already existing storage.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub remove_encryption: Option<bool>,
 }
 
 #[api(

@@ -98,6 +98,15 @@ pub async fn create_backup_job(job: BackupJobConfig) -> Result<(), Error> {
         param_bail!("schedule", "a schedule is required for job '{}'", job.id);
     }
 
+    if !job.has_target() {
+        param_bail!(
+            "pbs-remote",
+            "job '{}' needs a backup server or a target storage, otherwise the remotes would \
+             back up to their local default storage",
+            job.id
+        );
+    }
+
     {
         let _lock = pdm_config::backup_jobs::lock_config()?;
         let (mut config, _) = pdm_config::backup_jobs::config()?;
@@ -131,6 +140,8 @@ pub enum DeletableProperty {
     Disable,
     /// Delete the PBS remote reference.
     PbsRemote,
+    /// Delete the PBS datastore selection.
+    PbsDatastore,
     /// Delete the default storage.
     DefaultStorage,
     /// Delete the guest selection.
@@ -200,6 +211,7 @@ pub async fn update_backup_job(
                     DeletableProperty::Comment => job.comment = None,
                     DeletableProperty::Disable => job.disable = None,
                     DeletableProperty::PbsRemote => job.pbs_remote = None,
+                    DeletableProperty::PbsDatastore => job.pbs_datastore = None,
                     DeletableProperty::DefaultStorage => job.default_storage = None,
                     DeletableProperty::Guests => job.guests = Vec::new(),
                     DeletableProperty::Targets => job.targets = Vec::new(),
@@ -228,6 +240,9 @@ pub async fn update_backup_job(
         }
         if let Some(pbs_remote) = update.pbs_remote {
             job.pbs_remote = Some(pbs_remote);
+        }
+        if let Some(pbs_datastore) = update.pbs_datastore {
+            job.pbs_datastore = Some(pbs_datastore);
         }
         if let Some(default_storage) = update.default_storage {
             job.default_storage = Some(default_storage);
@@ -267,6 +282,15 @@ pub async fn update_backup_job(
         }
         if update.follow_migrations.is_some() {
             job.follow_migrations = update.follow_migrations;
+        }
+
+        if !job.has_target() {
+            param_bail!(
+                "pbs-remote",
+                "job '{}' needs a backup server or a target storage, otherwise the remotes \
+                 would back up to their local default storage",
+                id
+            );
         }
 
         let job = job.clone();

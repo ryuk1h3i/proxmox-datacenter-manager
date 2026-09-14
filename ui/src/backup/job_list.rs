@@ -103,6 +103,18 @@ fn remote_summary(job: &BackupJobConfig) -> String {
     }
 }
 
+/// Where the backups of a job are written to.
+fn target_summary(job: &BackupJobConfig) -> String {
+    if let Some(storage) = &job.default_storage {
+        return storage.clone();
+    }
+    match (&job.pbs_remote, &job.pbs_datastore) {
+        (Some(remote), Some(datastore)) => format!("{remote}: {datastore}"),
+        (Some(remote), None) => remote.clone(),
+        (None, _) => String::new(),
+    }
+}
+
 fn state_label(state: BackupJobSyncState) -> String {
     match state {
         BackupJobSyncState::Synced => tr!("Synced"),
@@ -160,11 +172,9 @@ impl LoadableComponent for BackupJobsPanelComp {
                     .flex(2)
                     .get_property_owned(remote_summary)
                     .into(),
-                DataTableColumn::new(tr!("Storage"))
+                DataTableColumn::new(tr!("Target"))
                     .flex(1)
-                    .get_property_owned(|job: &BackupJobConfig| {
-                        job.default_storage.clone().unwrap_or_default()
-                    })
+                    .get_property_owned(target_summary)
                     .into(),
                 DataTableColumn::new(tr!("Comment"))
                     .flex(2)

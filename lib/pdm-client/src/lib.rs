@@ -39,7 +39,7 @@ pub mod types {
         BackupJobConfig, BackupJobConfigUpdater, BackupJobGuest, BackupJobRemoteStatus,
         BackupJobSyncState, BackupJobTarget,
     };
-    pub use pdm_api_types::pbs::{PbsAttachResult, PbsPveStorageState};
+    pub use pdm_api_types::pbs::{PbsAttachRequest, PbsAttachResult, PbsPveStorageState};
     pub use pdm_api_types::pve_jobs::{
         PveBackupJob, PveBackupJobConfig, PveReplicationJob, PveReplicationJobConfig,
         PveReplicationStatus, PveVzdumpRequest,
@@ -2154,21 +2154,12 @@ impl<T: HttpApiClient> PdmClient<T> {
     pub async fn pbs_attach_storage_to_pve(
         &self,
         remote: &str,
-        datastore: &str,
-        storage: &str,
-        pve_remotes: Option<&[String]>,
+        request: &PbsAttachRequest,
     ) -> Result<Vec<PbsAttachResult>, Error> {
         let path = format!("/api2/extjs/pbs/remotes/{remote}/pve-storage");
-        let mut request = json!({
-            "datastore": datastore,
-            "storage": storage,
-        });
-        if let Some(pve_remotes) = pve_remotes {
-            request["pve-remotes"] = pve_remotes.into();
-        }
         Ok(self
             .0
-            .post(&path, &request)
+            .post(&path, request)
             .await?
             .expect_json()?
             .data)
