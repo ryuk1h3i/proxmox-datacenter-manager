@@ -25,7 +25,6 @@ use proxmox_notify::endpoints::smtp::{
 };
 use proxmox_notify::endpoints::webhook::{
     DeleteableWebhookProperty, KeyAndBase64Val, WebhookConfig, WebhookConfigUpdater,
-    WebhookPrivateConfig,
 };
 use proxmox_notify::matcher::{DeleteableMatcherProperty, MatcherConfig, MatcherConfigUpdater};
 
@@ -116,7 +115,7 @@ pub fn list_sendmail_endpoints() -> Result<Vec<SendmailConfig>, Error> {
 }
 
 #[api(
-    input: { properties: { name: { type: String } } },
+    input: { properties: { name: { description: "The name of the notification target.", type: String } } },
     access: { permission: &NOTIFICATIONS_PRIVILEGE },
     returns: { type: SendmailConfig },
 )]
@@ -144,7 +143,7 @@ pub fn add_sendmail_endpoint(config: SendmailConfig) -> Result<(), Error> {
 #[api(
     input: {
         properties: {
-            name: { type: String },
+            name: { description: "The name of the notification target.", type: String },
             update: { type: SendmailConfigUpdater, flatten: true },
             delete: {
                 description: "List of properties to delete.",
@@ -178,7 +177,7 @@ pub fn update_sendmail_endpoint(
 #[api(
     input: {
         properties: {
-            name: { type: String },
+            name: { description: "The name of the notification target.", type: String },
             digest: { type: ConfigDigest, optional: true },
         },
     },
@@ -214,7 +213,7 @@ pub fn list_smtp_endpoints() -> Result<Vec<SmtpConfig>, Error> {
 }
 
 #[api(
-    input: { properties: { name: { type: String } } },
+    input: { properties: { name: { description: "The name of the notification target.", type: String } } },
     access: { permission: &NOTIFICATIONS_PRIVILEGE },
     returns: { type: SmtpConfig },
 )]
@@ -256,7 +255,7 @@ pub fn add_smtp_endpoint(config: SmtpConfig, password: Option<String>) -> Result
 #[api(
     input: {
         properties: {
-            name: { type: String },
+            name: { description: "The name of the notification target.", type: String },
             update: { type: SmtpConfigUpdater, flatten: true },
             password: {
                 description: "Password for authentication with the SMTP server.",
@@ -306,7 +305,7 @@ pub fn update_smtp_endpoint(
 #[api(
     input: {
         properties: {
-            name: { type: String },
+            name: { description: "The name of the notification target.", type: String },
             digest: { type: ConfigDigest, optional: true },
         },
     },
@@ -342,7 +341,7 @@ pub fn list_gotify_endpoints() -> Result<Vec<GotifyConfig>, Error> {
 }
 
 #[api(
-    input: { properties: { name: { type: String } } },
+    input: { properties: { name: { description: "The name of the notification target.", type: String } } },
     access: { permission: &NOTIFICATIONS_PRIVILEGE },
     returns: { type: GotifyConfig },
 )]
@@ -383,7 +382,7 @@ pub fn add_gotify_endpoint(config: GotifyConfig, token: String) -> Result<(), Er
 #[api(
     input: {
         properties: {
-            name: { type: String },
+            name: { description: "The name of the notification target.", type: String },
             update: { type: GotifyConfigUpdater, flatten: true },
             token: {
                 description: "Authentication token for the Gotify server.",
@@ -433,7 +432,7 @@ pub fn update_gotify_endpoint(
 #[api(
     input: {
         properties: {
-            name: { type: String },
+            name: { description: "The name of the notification target.", type: String },
             digest: { type: ConfigDigest, optional: true },
         },
     },
@@ -447,7 +446,7 @@ pub fn delete_gotify_endpoint(name: String, digest: Option<ConfigDigest>) -> Res
 
     config_digest.detect_modification(digest.as_ref())?;
 
-    gotify_api::delete_endpoint(&mut notify_config, &name)?;
+    gotify_api::delete_gotify_endpoint(&mut notify_config, &name)?;
 
     pdm_config::notifications::save_config(notify_config)
 }
@@ -473,7 +472,7 @@ pub fn list_webhook_endpoints() -> Result<Vec<WebhookConfig>, Error> {
 }
 
 #[api(
-    input: { properties: { name: { type: String } } },
+    input: { properties: { name: { description: "The name of the notification target.", type: String } } },
     access: { permission: &NOTIFICATIONS_PRIVILEGE },
     returns: { type: WebhookConfig },
 )]
@@ -501,22 +500,19 @@ pub fn get_webhook_endpoint(name: String) -> Result<WebhookConfig, Error> {
 )]
 /// Add a new webhook notification target.
 pub fn add_webhook_endpoint(
-    config: WebhookConfig,
+    mut config: WebhookConfig,
     secret: Option<Vec<KeyAndBase64Val>>,
 ) -> Result<(), Error> {
     let _lock = pdm_config::notifications::lock_config()?;
     let (mut notify_config, _digest) = pdm_config::notifications::config()?;
 
-    let private_config = WebhookPrivateConfig {
-        name: config.name.clone(),
-        secret: secret
-            .unwrap_or_default()
-            .into_iter()
-            .map(Into::into)
-            .collect(),
-    };
+    config.secret = secret
+        .unwrap_or_default()
+        .into_iter()
+        .map(Into::into)
+        .collect();
 
-    webhook_api::add_endpoint(&mut notify_config, config, private_config)?;
+    webhook_api::add_endpoint(&mut notify_config, config)?;
 
     pdm_config::notifications::save_config(notify_config)
 }
@@ -524,7 +520,7 @@ pub fn add_webhook_endpoint(
 #[api(
     input: {
         properties: {
-            name: { type: String },
+            name: { description: "The name of the notification target.", type: String },
             update: { type: WebhookConfigUpdater, flatten: true },
             delete: {
                 description: "List of properties to delete.",
@@ -558,7 +554,7 @@ pub fn update_webhook_endpoint(
 #[api(
     input: {
         properties: {
-            name: { type: String },
+            name: { description: "The name of the notification target.", type: String },
             digest: { type: ConfigDigest, optional: true },
         },
     },
@@ -594,7 +590,7 @@ pub fn list_matchers() -> Result<Vec<MatcherConfig>, Error> {
 }
 
 #[api(
-    input: { properties: { name: { type: String } } },
+    input: { properties: { name: { description: "The name of the notification matcher.", type: String } } },
     access: { permission: &NOTIFICATIONS_PRIVILEGE },
     returns: { type: MatcherConfig },
 )]
@@ -622,7 +618,7 @@ pub fn add_matcher(config: MatcherConfig) -> Result<(), Error> {
 #[api(
     input: {
         properties: {
-            name: { type: String },
+            name: { description: "The name of the notification matcher.", type: String },
             update: { type: MatcherConfigUpdater, flatten: true },
             delete: {
                 description: "List of properties to delete.",
@@ -656,7 +652,7 @@ pub fn update_matcher(
 #[api(
     input: {
         properties: {
-            name: { type: String },
+            name: { description: "The name of the notification matcher.", type: String },
             digest: { type: ConfigDigest, optional: true },
         },
     },

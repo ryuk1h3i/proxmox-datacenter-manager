@@ -41,6 +41,12 @@ impl Context for PdmContext {
             .and_then(|(config, _digest)| config.http_proxy)
     }
 
+    fn default_config(&self) -> &'static str {
+        // No built-in targets/matchers for now - an empty config is valid and matches the
+        // previous behavior of a not-yet-existing notifications.cfg.
+        ""
+    }
+
     fn lookup_template(
         &self,
         _filename: &str,
