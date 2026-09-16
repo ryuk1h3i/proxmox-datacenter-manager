@@ -11,7 +11,8 @@ use proxmox_schema::api;
 use proxmox_sortable_macro::sortable;
 
 use proxmox_notify::api::{gotify as gotify_api, matcher as matcher_api, sendmail as sendmail_api};
-use proxmox_notify::api::{smtp as smtp_api, webhook as webhook_api};
+use proxmox_notify::api::{Target, get_targets};
+use proxmox_notify::api::{common as common_api, smtp as smtp_api, webhook as webhook_api};
 use proxmox_notify::endpoints::gotify::{
     DeleteableGotifyProperty, GotifyConfig, GotifyConfigUpdater, GotifyPrivateConfig,
     GotifyPrivateConfigUpdater,
@@ -41,6 +42,7 @@ const SUBDIRS: SubdirMap = &sorted!([
     ("matchers", &MATCHER_ROUTER),
     ("sendmail", &SENDMAIL_ROUTER),
     ("smtp", &SMTP_ROUTER),
+    ("targets", &TARGETS_ROUTER),
     ("webhook", &WEBHOOK_ROUTER),
 ]);
 
@@ -97,6 +99,47 @@ const MATCHER_ITEM_ROUTER: Router = Router::new()
     .get(&API_METHOD_GET_MATCHER)
     .put(&API_METHOD_UPDATE_MATCHER)
     .delete(&API_METHOD_DELETE_MATCHER);
+
+const TARGETS_ROUTER: Router = Router::new()
+    .get(&API_METHOD_LIST_TARGETS)
+    .match_all("name", &TARGET_ITEM_ROUTER);
+
+const TARGET_ITEM_ROUTER: Router = Router::new()
+    .get(&list_subdirs_api_method!(TARGET_ITEM_SUBDIRS))
+    .subdirs(TARGET_ITEM_SUBDIRS);
+
+#[sortable]
+const TARGET_ITEM_SUBDIRS: SubdirMap =
+    &sorted!([("test", &Router::new().post(&API_METHOD_TEST_TARGET))]);
+
+#[api(
+    access: { permission: &NOTIFICATIONS_PRIVILEGE },
+    returns: {
+        type: Array,
+        items: { type: Target },
+        description: "List of all notification targets, across all target types.",
+    },
+)]
+/// List all notification targets (sendmail, SMTP, Gotify, webhook combined).
+pub fn list_targets() -> Result<Vec<Target>, Error> {
+    let (config, _digest) = pdm_config::notifications::config()?;
+    Ok(get_targets(&config)?)
+}
+
+#[api(
+    input: {
+        properties: {
+            name: { description: "The name of the notification target.", type: String },
+        },
+    },
+    access: { permission: &NOTIFICATIONS_PRIVILEGE },
+    protected: true,
+)]
+/// Send a test notification to a specific notification target.
+pub fn test_target(name: String) -> Result<(), Error> {
+    let (config, _digest) = pdm_config::notifications::config()?;
+    Ok(common_api::test_target(&config, &name)?)
+}
 
 // --- sendmail -------------------------------------------------------------
 
