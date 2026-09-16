@@ -242,6 +242,10 @@ impl RemoteMappingCache {
         };
 
         let found = if let Some(info) = self.info_by_hostname_mut(remote_name, hostname) {
+            // Remember this before updating, so the notification below can fire exactly once per
+            // outage instead of on every back-off escalation.
+            let was_reachable = info.is_reachable();
+
             if let Some(next_try) = info.set_reachable(connection_state) {
                 log::warn!(
                     "could not reach host {} of {} for some time, backing off until {}",
@@ -249,10 +253,10 @@ impl RemoteMappingCache {
                     remote_name,
                     epoch_to_rfc2822(next_try).unwrap_or_else(|_| next_try.to_string())
                 );
-                // only notify once we actually start backing off, not on every retry
-                if let Some(error) = &error {
-                    crate::notifications::notify_remote_unreachable(remote_name, hostname, error);
-                }
+            }
+
+            if let (true, Some(error)) = (was_reachable, &error) {
+                crate::notifications::notify_remote_unreachable(remote_name, hostname, error);
             }
             true
         } else {

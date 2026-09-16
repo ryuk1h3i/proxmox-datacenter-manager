@@ -25,7 +25,7 @@ use proxmox_notify::endpoints::smtp::{
     SmtpPrivateConfigUpdater,
 };
 use proxmox_notify::endpoints::webhook::{
-    DeleteableWebhookProperty, KeyAndBase64Val, WebhookConfig, WebhookConfigUpdater,
+    DeleteableWebhookProperty, WebhookConfig, WebhookConfigUpdater,
 };
 use proxmox_notify::matcher::{DeleteableMatcherProperty, MatcherConfig, MatcherConfigUpdater};
 
@@ -529,31 +529,18 @@ pub fn get_webhook_endpoint(name: String) -> Result<WebhookConfig, Error> {
     input: {
         properties: {
             config: { type: WebhookConfig, flatten: true },
-            secret: {
-                description: "Secrets that can be referenced from the URL, header or body \
-                    templates as `{{ secrets.<name> }}`.",
-                type: Array,
-                items: { type: KeyAndBase64Val },
-                optional: true,
-            },
         },
     },
     access: { permission: &NOTIFICATIONS_PRIVILEGE },
     protected: true,
 )]
 /// Add a new webhook notification target.
-pub fn add_webhook_endpoint(
-    mut config: WebhookConfig,
-    secret: Option<Vec<KeyAndBase64Val>>,
-) -> Result<(), Error> {
+///
+/// Values of the `secret` array are moved into the private configuration file, so they are never
+/// returned when the target is read back.
+pub fn add_webhook_endpoint(config: WebhookConfig) -> Result<(), Error> {
     let _lock = pdm_config::notifications::lock_config()?;
     let (mut notify_config, _digest) = pdm_config::notifications::config()?;
-
-    config.secret = secret
-        .unwrap_or_default()
-        .into_iter()
-        .map(Into::into)
-        .collect();
 
     webhook_api::add_endpoint(&mut notify_config, config)?;
 

@@ -1,23 +1,23 @@
 //! Notification targets (sendmail, SMTP, Gotify, webhook) and matchers configuration UI.
 //!
-//! Field layout mirrors PVE/PBS's notification editors (`proxmox-widget-toolkit`'s
-//! `SmtpEditPanel.js`, `WebhookEditPanel.js`, `NotificationMatcherEdit.js` and friends): targets
-//! are managed in one combined grid (with an "Add" menu to pick the type), and matchers pick
-//! their targets from a checkbox grid instead of typing names by hand.
+//! The layout mirrors PVE/PBS's notification editors (`proxmox-widget-toolkit`'s
+//! `NotificationConfigView.js`, `SmtpEditPanel.js`, `NotificationMatcherEdit.js`): targets of all
+//! types live in one grid with an "Add" type menu and a "Test" button, and matchers pick their
+//! targets from a checkbox grid rather than by typing names.
 
 use std::collections::HashSet;
 use std::future::Future;
 use std::pin::Pin;
 use std::rc::Rc;
 
-use anyhow::Error;
+use anyhow::{Error, bail};
 use serde_json::Value;
 use yew::virtual_dom::{Key, VComp, VNode};
 
 use pwt::AsyncPool;
 use pwt::prelude::*;
 use pwt::props::{ContainerBuilder, ExtractPrimaryKey, FieldBuilder, WidgetBuilder};
-use pwt::state::{Selection, Store};
+use pwt::state::{NavigationContainer, Selection, Store};
 use pwt::widget::data_table::{DataTable, DataTableColumn, DataTableHeader, MultiSelectMode};
 use pwt::widget::form::{
     Checkbox, Combobox, DisplayField, Field, FormContext, InputType, ManagedField,
@@ -47,6 +47,28 @@ fn value_bool(value: &Value, key: &str) -> bool {
     value.get(key).and_then(Value::as_bool).unwrap_or(false)
 }
 
+fn value_string_list(value: &Value, key: &str) -> String {
+    value
+        .get(key)
+        .and_then(Value::as_array)
+        .map(|list| {
+            list.iter()
+                .filter_map(Value::as_str)
+                .collect::<Vec<_>>()
+                .join(", ")
+        })
+        .unwrap_or_default()
+}
+
+fn enabled_text(value: &Value) -> Html {
+    let text = if value_bool(value, "disable") {
+        tr!("No")
+    } else {
+        tr!("Yes")
+    };
+    text.into()
+}
+
 /// Combined "Notifications" configuration panel (targets + matchers).
 #[function_component(NotificationsPanel)]
 pub fn notifications_panel() -> Html {
@@ -67,12 +89,10 @@ pub fn notifications_panel() -> Html {
             |_| MatcherGrid::new().into(),
         );
 
-    pwt::state::NavigationContainer::new()
-        .with_child(panel)
-        .into()
+    NavigationContainer::new().with_child(panel).into()
 }
 
-// --- StringList: a comma-separated text field bound to a JSON array of strings -------------
+// --- StringList: comma separated text bound to a JSON string array ---------------------------
 
 #[widget(comp = ManagedFieldMaster<StringListField>, @input)]
 #[derive(Clone, PartialEq, Properties)]
@@ -94,6 +114,7 @@ pub enum StringListMsg {
     Input(String),
 }
 
+#[doc(hidden)]
 pub struct StringListField {
     state: ManagedFieldState,
     text: String,
@@ -103,10 +124,16 @@ pwt::impl_deref_mut_property!(StringListField, state, ManagedFieldState);
 
 fn parse_string_list(text: &str) -> Vec<String> {
     text.split([',', ';'])
-        .map(|s| s.trim())
+        .map(str::trim)
         .filter(|s| !s.is_empty())
-        .map(|s| s.to_string())
+        .map(ToString::to_string)
         .collect()
+}
+
+impl StringListField {
+    fn items(value: &Value) -> Vec<String> {
+        serde_json::from_value(value.clone()).unwrap_or_default()
+    }
 }
 
 impl ManagedField for StringListField {
@@ -130,30 +157,134 @@ impl ManagedField for StringListField {
     fn update(&mut self, ctx: &ManagedFieldContext<Self>, msg: Self::Message) -> bool {
         match msg {
             StringListMsg::Input(text) => {
-                let items = parse_string_list(&text);
+                ctx.link().update_value(parse_string_list(&text));
                 self.text = text;
-                ctx.link().update_value(items);
             }
         }
         true
     }
 
     fn value_changed(&mut self, _ctx: &ManagedFieldContext<Self>) {
-        if let Ok(items) = serde_json::from_value::<Vec<String>>(self.state.value.clone()) {
+        // Re-render the text only when the value differs from what is currently typed, so a
+        // trailing separator is not swallowed while the user is still editing.
+        let items = Self::items(&self.state.value);
+        if parse_string_list(&self.text) != items {
             self.text = items.join(", ");
         }
     }
 
     fn view(&self, ctx: &ManagedFieldContext<Self>) -> Html {
         Field::new()
-            .with_std_props(&ctx.props().std_props)
             .value(self.text.clone())
             .on_input(ctx.link().callback(StringListMsg::Input))
             .into()
     }
 }
 
-// --- TargetSelector: checkbox multi-select grid of all configured notification targets -----
+// --- SeveritySelector: the fixed severity set rendered as checkboxes -------------------------
+
+const SEVERITIES: &[&str] = &["info", "notice", "warning", "error", "unknown"];
+
+fn severity_label(severity: &str) -> String {
+    match severity {
+        "info" => tr!("Info"),
+        "notice" => tr!("Notice"),
+        "warning" => tr!("Warning"),
+        "error" => tr!("Error"),
+        _ => tr!("Unknown"),
+    }
+}
+
+#[widget(comp = ManagedFieldMaster<SeveritySelectorField>, @input)]
+#[derive(Clone, PartialEq, Properties)]
+pub struct SeveritySelector {}
+
+impl SeveritySelector {
+    pub fn new() -> Self {
+        yew::props!(Self {})
+    }
+}
+
+impl Default for SeveritySelector {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
+pub enum SeverityMsg {
+    Toggle(&'static str, bool),
+}
+
+#[doc(hidden)]
+pub struct SeveritySelectorField {
+    state: ManagedFieldState,
+    selected: HashSet<String>,
+}
+
+pwt::impl_deref_mut_property!(SeveritySelectorField, state, ManagedFieldState);
+
+impl ManagedField for SeveritySelectorField {
+    type Message = SeverityMsg;
+    type Properties = SeveritySelector;
+    type ValidateClosure = ();
+
+    fn validation_args(_props: &Self::Properties) -> Self::ValidateClosure {}
+
+    fn validator(_args: &Self::ValidateClosure, value: &Value) -> Result<Value, Error> {
+        Ok(value.clone())
+    }
+
+    fn create(_ctx: &ManagedFieldContext<Self>) -> Self {
+        Self {
+            state: ManagedFieldState::new(Value::Array(Vec::new()), Value::Array(Vec::new())),
+            selected: HashSet::new(),
+        }
+    }
+
+    fn update(&mut self, ctx: &ManagedFieldContext<Self>, msg: Self::Message) -> bool {
+        match msg {
+            SeverityMsg::Toggle(severity, checked) => {
+                if checked {
+                    self.selected.insert(severity.to_string());
+                } else {
+                    self.selected.remove(severity);
+                }
+                // Submit in the canonical order instead of the set's iteration order.
+                let selected: Vec<String> = SEVERITIES
+                    .iter()
+                    .filter(|s| self.selected.contains(**s))
+                    .map(|s| s.to_string())
+                    .collect();
+                ctx.link().update_value(selected);
+            }
+        }
+        true
+    }
+
+    fn value_changed(&mut self, _ctx: &ManagedFieldContext<Self>) {
+        let items: Vec<String> =
+            serde_json::from_value(self.state.value.clone()).unwrap_or_default();
+        self.selected = items.into_iter().collect();
+    }
+
+    fn view(&self, ctx: &ManagedFieldContext<Self>) -> Html {
+        let mut row = Row::new().gap(4);
+        for &severity in SEVERITIES {
+            row.add_child(
+                Checkbox::new()
+                    .box_label(severity_label(severity))
+                    .checked(self.selected.contains(severity))
+                    .on_change(
+                        ctx.link()
+                            .callback(move |checked| SeverityMsg::Toggle(severity, checked)),
+                    ),
+            );
+        }
+        row.into()
+    }
+}
+
+// --- TargetSelector: checkbox grid over all configured notification targets -----------------
 
 #[derive(Clone, PartialEq)]
 struct TargetEntry {
@@ -189,6 +320,7 @@ pub enum TargetSelectorMsg {
     SelectionChange,
 }
 
+#[doc(hidden)]
 pub struct TargetSelectorField {
     state: ManagedFieldState,
     store: Store<TargetEntry>,
@@ -207,16 +339,6 @@ impl TargetSelectorField {
             .into_iter()
             .map(Key::from)
             .collect()
-    }
-
-    fn publish(&self, ctx: &ManagedFieldContext<Self>) {
-        let selected: Vec<String> = self
-            .selection
-            .selected_keys()
-            .iter()
-            .map(|key| key.to_string())
-            .collect();
-        ctx.link().update_value(selected);
     }
 
     fn columns() -> Rc<Vec<DataTableHeader<TargetEntry>>> {
@@ -242,11 +364,17 @@ impl TargetSelectorField {
 impl ManagedField for TargetSelectorField {
     type Message = TargetSelectorMsg;
     type Properties = TargetSelector;
-    type ValidateClosure = ();
+    type ValidateClosure = bool;
 
-    fn validation_args(_props: &Self::Properties) -> Self::ValidateClosure {}
+    fn validation_args(props: &Self::Properties) -> Self::ValidateClosure {
+        props.input_props.required
+    }
 
-    fn validator(_args: &Self::ValidateClosure, value: &Value) -> Result<Value, Error> {
+    fn validator(required: &Self::ValidateClosure, value: &Value) -> Result<Value, Error> {
+        let targets: Vec<String> = serde_json::from_value(value.clone()).unwrap_or_default();
+        if *required && targets.is_empty() {
+            bail!("no notification target selected");
+        }
         Ok(value.clone())
     }
 
@@ -259,10 +387,9 @@ impl ManagedField for TargetSelectorField {
         async_pool.spawn({
             let link = ctx.link().clone();
             async move {
-                let result: Result<Vec<Value>, String> =
-                    http_get("/config/notifications/targets", None)
-                        .await
-                        .map_err(|err| err.to_string());
+                let result = http_get("/config/notifications/targets", None)
+                    .await
+                    .map_err(|err: Error| err.to_string());
                 link.send_message(TargetSelectorMsg::Loaded(result));
             }
         });
@@ -296,7 +423,15 @@ impl ManagedField for TargetSelectorField {
                 self.selection
                     .bulk_select(Self::selected_keys(&self.state.value));
             }
-            TargetSelectorMsg::SelectionChange => self.publish(ctx),
+            TargetSelectorMsg::SelectionChange => {
+                let selected: Vec<String> = self
+                    .selection
+                    .selected_keys()
+                    .iter()
+                    .map(|key| key.to_string())
+                    .collect();
+                ctx.link().update_value(selected);
+            }
         }
         true
     }
@@ -325,7 +460,7 @@ impl ManagedField for TargetSelectorField {
     }
 }
 
-// --- Unified notification targets grid ------------------------------------------------------
+// --- Notification targets -------------------------------------------------------------------
 
 #[derive(PartialEq, Clone, Copy)]
 enum TargetType {
@@ -365,11 +500,11 @@ impl TargetType {
     }
 }
 
-#[derive(PartialEq, Properties, Clone, Default)]
+#[derive(PartialEq, Clone, Default, Properties)]
 struct TargetGrid;
 
 impl TargetGrid {
-    pub fn new() -> Self {
+    fn new() -> Self {
         Self
     }
 }
@@ -393,6 +528,7 @@ enum TargetViewState {
     Remove,
 }
 
+#[doc(hidden)]
 struct TargetGridComp {
     state: LoadableComponentState<TargetViewState>,
     store: Store<Value>,
@@ -402,9 +538,9 @@ struct TargetGridComp {
 pwt::impl_deref_mut_property!(TargetGridComp, state, LoadableComponentState<TargetViewState>);
 
 impl TargetGridComp {
-    fn selected_type(&self) -> Option<TargetType> {
-        let key = self.selection.selected_key()?;
-        let record = self.store.read().lookup_record(&key)?.clone();
+    /// Each target type has its own API path, so editing or deleting a row needs its type.
+    fn type_of(&self, key: &Key) -> Option<TargetType> {
+        let record = self.store.read().lookup_record(key).cloned()?;
         TargetType::from_type_str(&value_str(&record, "type"))
     }
 }
@@ -442,17 +578,13 @@ impl LoadableComponent for TargetGridComp {
         match msg {
             TargetMsg::Loaded(data) => self.store.set_data(data),
             TargetMsg::Remove(key) => {
-                let name = key.to_string();
-                let Some(ty) = self.selected_type() else {
+                let Some(ty) = self.type_of(&key) else {
                     return false;
                 };
+                let name = key.to_string();
                 let link = ctx.link().clone();
                 ctx.link().spawn(async move {
-                    let url = format!(
-                        "{}/{}",
-                        ty.base_url(),
-                        percent_encode_component(&name)
-                    );
+                    let url = format!("{}/{}", ty.base_url(), percent_encode_component(&name));
                     if let Err(err) = http_delete(&url, None).await {
                         link.show_error(tr!("Error"), err, true);
                     }
@@ -468,21 +600,66 @@ impl LoadableComponent for TargetGridComp {
     }
 
     fn toolbar(&self, ctx: &LoadableComponentContext<Self>) -> Option<Html> {
-        let selection = self.selection.selected_key();
         let link = ctx.link();
+        let selected = self.selection.selected_key();
+        let disabled = selected.is_none();
+
         let add_menu = Menu::new()
-            .with_item(MenuItem::new(tr!("Sendmail")).icon_class("fa fa-envelope-o").on_select(
-                link.change_view_callback(|_| Some(TargetViewState::Create(TargetType::Sendmail))),
-            ))
-            .with_item(MenuItem::new(tr!("SMTP")).icon_class("fa fa-envelope-o").on_select(
-                link.change_view_callback(|_| Some(TargetViewState::Create(TargetType::Smtp))),
-            ))
-            .with_item(MenuItem::new(tr!("Gotify")).icon_class("fa fa-bell-o").on_select(
-                link.change_view_callback(|_| Some(TargetViewState::Create(TargetType::Gotify))),
-            ))
-            .with_item(MenuItem::new(tr!("Webhook")).icon_class("fa fa-globe").on_select(
-                link.change_view_callback(|_| Some(TargetViewState::Create(TargetType::Webhook))),
-            ));
+            .with_item(
+                MenuItem::new(tr!("Sendmail"))
+                    .icon_class("fa fa-envelope-o")
+                    .on_select(link.change_view_callback(|_| {
+                        Some(TargetViewState::Create(TargetType::Sendmail))
+                    })),
+            )
+            .with_item(
+                MenuItem::new(tr!("SMTP"))
+                    .icon_class("fa fa-envelope")
+                    .on_select(link.change_view_callback(|_| {
+                        Some(TargetViewState::Create(TargetType::Smtp))
+                    })),
+            )
+            .with_item(
+                MenuItem::new(tr!("Gotify"))
+                    .icon_class("fa fa-bell-o")
+                    .on_select(link.change_view_callback(|_| {
+                        Some(TargetViewState::Create(TargetType::Gotify))
+                    })),
+            )
+            .with_item(
+                MenuItem::new(tr!("Webhook"))
+                    .icon_class("fa fa-globe")
+                    .on_select(link.change_view_callback(|_| {
+                        Some(TargetViewState::Create(TargetType::Webhook))
+                    })),
+            );
+
+        let test_button = {
+            let link = link.clone();
+            let name = selected.as_ref().map(|key| key.to_string());
+            Button::new(tr!("Test"))
+                .disabled(disabled)
+                .on_activate(move |_| {
+                    let Some(name) = name.clone() else { return };
+                    let result_link = link.clone();
+                    link.spawn(async move {
+                        let url = format!(
+                            "/config/notifications/targets/{}/test",
+                            percent_encode_component(&name)
+                        );
+                        match http_post::<()>(&url, None).await {
+                            Ok(()) => result_link.show_error(
+                                tr!("Notification Target Test"),
+                                tr!("Sent a test notification to '{0}'.", name),
+                                false,
+                            ),
+                            Err(err) => {
+                                result_link.show_error(tr!("Notification Target Test"), err, true)
+                            }
+                        }
+                    });
+                })
+        };
 
         Some(
             Toolbar::new()
@@ -490,31 +667,19 @@ impl LoadableComponent for TargetGridComp {
                 .with_child(MenuButton::new(tr!("Add")).show_arrow(true).menu(add_menu))
                 .with_child(
                     Button::new(tr!("Edit"))
-                        .disabled(selection.is_none())
+                        .disabled(disabled)
                         .on_activate(link.change_view_callback(|_| Some(TargetViewState::Edit))),
                 )
                 .with_child(
                     Button::new(tr!("Remove"))
-                        .disabled(selection.is_none())
+                        .disabled(disabled)
                         .on_activate(link.change_view_callback(|_| Some(TargetViewState::Remove))),
                 )
+                .with_child(test_button)
                 .with_flex_spacer()
                 .with_child({
-                    let link = link.clone();
-                    let name = selection.map(|k| k.to_string());
-                    Button::new(tr!("Test")).disabled(name.is_none()).on_activate(move |_| {
-                        let Some(name) = name.clone() else { return };
-                        let link = link.clone();
-                        link.spawn(async move {
-                            let url = format!(
-                                "/config/notifications/targets/{}/test",
-                                percent_encode_component(&name)
-                            );
-                            if let Err(err) = http_post::<()>(&url, None).await {
-                                link.show_error(tr!("Notification Target Test"), err, true);
-                            }
-                        });
-                    })
+                    let link = ctx.link().clone();
+                    Button::refresh(self.loading()).onclick(move |_| link.send_reload())
                 })
                 .into(),
         )
@@ -525,8 +690,8 @@ impl LoadableComponent for TargetGridComp {
         DataTable::new(
             Rc::new(vec![
                 DataTableColumn::new(tr!("Enabled"))
-                    .width("80px")
-                    .render(|v: &Value| if value_bool(v, "disable") { tr!("No") } else { tr!("Yes") }.into())
+                    .width("90px")
+                    .render(enabled_text)
                     .into(),
                 DataTableColumn::new(tr!("Target Name"))
                     .flex(2)
@@ -556,11 +721,11 @@ impl LoadableComponent for TargetGridComp {
         view_state: &Self::ViewState,
     ) -> Option<Html> {
         match view_state {
-            TargetViewState::Create(ty) => Some(create_target_dialog(ctx, *ty)),
+            TargetViewState::Create(ty) => Some(target_edit_dialog(ctx, *ty, None)),
             TargetViewState::Edit => {
-                let ty = self.selected_type()?;
                 let key = self.selection.selected_key()?;
-                Some(edit_target_dialog(ctx, ty, key.to_string()))
+                let ty = self.type_of(&key)?;
+                Some(target_edit_dialog(ctx, ty, Some(key.to_string())))
             }
             TargetViewState::Remove => self.selection.selected_key().map(|key| {
                 ConfirmDialog::new(
@@ -569,7 +734,6 @@ impl LoadableComponent for TargetGridComp {
                 )
                 .on_confirm({
                     let link = ctx.link().clone();
-                    let key = key.clone();
                     move |_| link.send_message(TargetMsg::Remove(key.clone()))
                 })
                 .into()
@@ -578,210 +742,172 @@ impl LoadableComponent for TargetGridComp {
     }
 }
 
-fn create_target_dialog(
+fn target_edit_dialog(
     ctx: &LoadableComponentContext<TargetGridComp>,
     ty: TargetType,
+    name: Option<String>,
 ) -> Html {
     let base_url = ty.base_url();
-    EditWindow::new(tr!("Add") + ": " + &ty.label())
-        .renderer(move |_form_ctx| target_input_panel(ty, true, None))
-        .on_submit(move |form_ctx: FormContext| async move {
-            let data = form_ctx.get_submit_data();
-            http_post(base_url, Some(data)).await
-        })
-        .on_done(ctx.link().callback(|_| TargetMsg::Reload))
-        .into()
-}
 
-fn edit_target_dialog(
-    ctx: &LoadableComponentContext<TargetGridComp>,
-    ty: TargetType,
-    name: String,
-) -> Html {
-    let url = format!("{}/{}", ty.base_url(), percent_encode_component(&name));
-    let display_name = name.clone();
-    EditWindow::new(tr!("Edit") + ": " + &ty.label())
-        .renderer(move |_form_ctx| target_input_panel(ty, false, Some(display_name.clone())))
-        .loader(url.clone())
-        .submit_digest(true)
-        .on_submit(move |form_ctx: FormContext| {
-            let url = url.clone();
-            async move {
-                let data = form_ctx.get_submit_data();
-                http_put(&url, Some(data)).await
-            }
-        })
-        .on_done(ctx.link().callback(|_| TargetMsg::Reload))
-        .into()
-}
-
-fn name_field(is_create: bool, name: Option<String>) -> (Html, Html) {
-    let label = tr!("Endpoint Name");
-    let field = match name {
-        Some(name) => DisplayField::new().name("name").value(name).into(),
-        None => Field::new().name("name").required(is_create).into(),
+    let window = match &name {
+        Some(name) => {
+            let url = format!("{base_url}/{}", percent_encode_component(name));
+            EditWindow::new(tr!("Edit") + ": " + &ty.label())
+                .loader(url.clone())
+                .submit_digest(true)
+                .on_submit(move |form_ctx: FormContext| {
+                    let url = url.clone();
+                    async move { http_put(&url, Some(form_ctx.get_submit_data())).await }
+                })
+        }
+        None => EditWindow::new(tr!("Add") + ": " + &ty.label()).on_submit(
+            move |form_ctx: FormContext| async move {
+                http_post::<()>(base_url, Some(form_ctx.get_submit_data())).await
+            },
+        ),
     };
-    (label.into(), field)
+
+    window
+        .min_width(600)
+        .renderer(move |_form_ctx| target_input_panel(ty, name.clone()))
+        .on_done(ctx.link().callback(|_| TargetMsg::Reload))
+        .into()
 }
 
-fn target_input_panel(ty: TargetType, is_create: bool, name: Option<String>) -> Html {
-    let panel = InputPanel::new().padding(4);
-    match ty {
-        TargetType::Sendmail => sendmail_fields(panel, is_create, name),
-        TargetType::Smtp => smtp_fields(panel, is_create, name),
-        TargetType::Gotify => gotify_fields(panel, is_create, name),
-        TargetType::Webhook => webhook_fields(panel, is_create, name),
+/// The name is the config section key, so it is only editable while creating the entry.
+fn add_name_field(panel: &mut InputPanel, label: String, name: Option<String>) {
+    match name {
+        Some(name) => panel.add_field(label, DisplayField::new().name("name").value(name)),
+        None => panel.add_field(label, Field::new().name("name").required(true)),
     }
 }
 
-fn sendmail_fields(mut panel: InputPanel, is_create: bool, name: Option<String>) -> Html {
-    let (label, field) = name_field(is_create, name);
-    panel.add_field(label, field);
-    panel.add_field(tr!("Disable"), Checkbox::new().name("disable"));
-    panel.add_field(
-        tr!("Recipient(s)"),
-        StringList::new()
-            .name("mailto")
-            .placeholder(tr!("Comma-separated list of email addresses")),
+fn target_input_panel(ty: TargetType, name: Option<String>) -> Html {
+    let is_create = name.is_none();
+    let mut panel = InputPanel::new().padding(4).min_width(500);
+
+    add_name_field(&mut panel, tr!("Endpoint Name"), name);
+    panel.add_right_field(tr!("Disable"), Checkbox::new().name("disable"));
+
+    match ty {
+        TargetType::Sendmail => {
+            panel.add_large_field(
+                false,
+                false,
+                tr!("Recipients (comma separated)"),
+                StringList::new().name("mailto"),
+            );
+            panel.add_field(
+                tr!("From Address"),
+                Field::new().name("from-address").submit_empty(false),
+            );
+            panel.add_right_field(
+                tr!("Author"),
+                Field::new().name("author").submit_empty(false),
+            );
+        }
+        TargetType::Smtp => {
+            panel.add_field(tr!("Server"), Field::new().name("server").required(true));
+            panel.add_right_field(
+                tr!("Encryption"),
+                Combobox::new()
+                    .name("mode")
+                    .editable(false)
+                    .items(Rc::new(vec![
+                        "insecure".into(),
+                        "starttls".into(),
+                        "tls".into(),
+                    ]))
+                    .render_value(|value: &AttrValue| {
+                        match value.as_str() {
+                            "insecure" => tr!("None (insecure)"),
+                            "starttls" => "STARTTLS".to_string(),
+                            "tls" => "TLS".to_string(),
+                            _ => String::new(),
+                        }
+                        .into()
+                    }),
+            );
+            panel.add_field(
+                tr!("Port"),
+                Number::<u32>::new()
+                    .name("port")
+                    .min(1)
+                    .max(65535)
+                    .submit_empty(false),
+            );
+            panel.add_right_field(
+                tr!("Username"),
+                Field::new().name("username").submit_empty(false),
+            );
+            panel.add_field(
+                tr!("Password"),
+                Field::new()
+                    .name("password")
+                    .input_type(InputType::Password)
+                    .submit_empty(false),
+            );
+            panel.add_right_field(
+                tr!("From Address"),
+                Field::new().name("from-address").required(true),
+            );
+            panel.add_large_field(
+                false,
+                false,
+                tr!("Recipients (comma separated)"),
+                StringList::new().name("mailto"),
+            );
+            panel.add_field(
+                tr!("Author"),
+                Field::new().name("author").submit_empty(false),
+            );
+        }
+        TargetType::Gotify => {
+            panel.add_field(tr!("Server URL"), Field::new().name("server").required(true));
+            panel.add_right_field(
+                tr!("API Token"),
+                Field::new()
+                    .name("token")
+                    .input_type(InputType::Password)
+                    .required(is_create)
+                    .submit_empty(false),
+            );
+        }
+        TargetType::Webhook => {
+            panel.add_field(
+                tr!("Method"),
+                Combobox::new()
+                    .name("method")
+                    .editable(false)
+                    .items(Rc::new(vec!["post".into(), "put".into(), "get".into()]))
+                    .render_value(|value: &AttrValue| value.as_str().to_uppercase().into()),
+            );
+            panel.add_large_field(
+                false,
+                false,
+                tr!("URL"),
+                Field::new().name("url").required(true),
+            );
+        }
+    }
+
+    panel.add_large_field(
+        false,
+        false,
+        tr!("Comment"),
+        Field::new().name("comment").submit_empty(false),
     );
-    panel.add_field(tr!("Comment"), Field::new().name("comment"));
-    panel.add_field(
-        tr!("Author"),
-        Field::new()
-            .name("author")
-            .placeholder(tr!("Proxmox Datacenter Manager")),
-    );
-    panel.add_field(
-        tr!("From Address"),
-        Field::new().name("from-address").placeholder("user@example.com"),
-    );
+
     panel.into()
 }
 
-fn smtp_fields(mut panel: InputPanel, is_create: bool, name: Option<String>) -> Html {
-    let (label, field) = name_field(is_create, name);
-    panel.add_field(label, field);
-    panel.add_field(tr!("Disable"), Checkbox::new().name("disable"));
-    panel.add_field(
-        tr!("Server"),
-        Field::new()
-            .name("server")
-            .required(true)
-            .placeholder("mail.example.com"),
-    );
-    panel.add_field(
-        tr!("Encryption"),
-        Combobox::new()
-            .name("mode")
-            .editable(false)
-            .items(Rc::new(vec!["insecure".into(), "starttls".into(), "tls".into()]))
-            .render_value(|value: &AttrValue| {
-                match value.as_str() {
-                    "insecure" => tr!("None (insecure)"),
-                    "starttls" => "STARTTLS".into(),
-                    "tls" => "TLS".into(),
-                    _ => "".into(),
-                }
-                .into()
-            }),
-    );
-    panel.add_field(
-        tr!("Port"),
-        Number::<u32>::new()
-            .name("port")
-            .min(1u32)
-            .max(65535u32)
-            .placeholder(tr!("Default (465)")),
-    );
-    panel.add_field(tr!("Username"), Field::new().name("username"));
-    panel.add_field(
-        tr!("Password"),
-        Field::new()
-            .name("password")
-            .input_type(InputType::Password)
-            .placeholder(if is_create { String::new() } else { tr!("Unchanged") }),
-    );
-    panel.add_field(
-        tr!("From Address"),
-        Field::new().name("from-address").placeholder("user@example.com"),
-    );
-    panel.add_field(
-        tr!("Recipient(s)"),
-        StringList::new()
-            .name("mailto")
-            .placeholder(tr!("Comma-separated list of email addresses")),
-    );
-    panel.add_field(tr!("Comment"), Field::new().name("comment"));
-    panel.add_field(
-        tr!("Author"),
-        Field::new()
-            .name("author")
-            .placeholder(tr!("Proxmox Datacenter Manager")),
-    );
-    panel.into()
-}
+// --- Notification matchers --------------------------------------------------------------------
 
-fn gotify_fields(mut panel: InputPanel, is_create: bool, name: Option<String>) -> Html {
-    let (label, field) = name_field(is_create, name);
-    panel.add_field(label, field);
-    panel.add_field(tr!("Disable"), Checkbox::new().name("disable"));
-    panel.add_field(
-        tr!("Server URL"),
-        Field::new()
-            .name("server")
-            .required(true)
-            .placeholder("https://gotify.example.com"),
-    );
-    panel.add_field(
-        tr!("API Token"),
-        Field::new()
-            .name("token")
-            .input_type(InputType::Password)
-            .required(is_create)
-            .placeholder(if is_create { String::new() } else { tr!("Unchanged") }),
-    );
-    panel.add_field(tr!("Comment"), Field::new().name("comment"));
-    panel.into()
-}
-
-fn webhook_fields(mut panel: InputPanel, is_create: bool, name: Option<String>) -> Html {
-    let (label, field) = name_field(is_create, name);
-    panel.add_field(label, field);
-    panel.add_field(tr!("Disable"), Checkbox::new().name("disable"));
-    panel.add_field(
-        tr!("Method"),
-        Combobox::new()
-            .name("method")
-            .editable(false)
-            .items(Rc::new(vec!["post".into(), "put".into(), "get".into()]))
-            .render_value(|value: &AttrValue| value.to_string().to_uppercase().into()),
-    );
-    panel.add_field(
-        tr!("URL"),
-        Field::new()
-            .name("url")
-            .required(true)
-            .placeholder("https://example.com/hook"),
-    );
-    panel.add_field(tr!("Comment"), Field::new().name("comment"));
-    panel.into()
-}
-
-// --- Matchers --------------------------------------------------------------------------------
-
-const SEVERITIES: &[(&str, &str)] = &[
-    ("info", "Info"),
-    ("notice", "Notice"),
-    ("warning", "Warning"),
-    ("error", "Error"),
-    ("unknown", "Unknown"),
-];
-
-#[derive(PartialEq, Properties, Clone, Default)]
+#[derive(PartialEq, Clone, Default, Properties)]
 struct MatcherGrid;
 
 impl MatcherGrid {
-    pub fn new() -> Self {
+    fn new() -> Self {
         Self
     }
 }
@@ -805,6 +931,7 @@ enum MatcherViewState {
     Remove,
 }
 
+#[doc(hidden)]
 struct MatcherGridComp {
     state: LoadableComponentState<MatcherViewState>,
     store: Store<Value>,
@@ -846,8 +973,8 @@ impl LoadableComponent for MatcherGridComp {
         match msg {
             MatcherMsg::Loaded(data) => self.store.set_data(data),
             MatcherMsg::Remove(key) => {
-                let link = ctx.link().clone();
                 let name = key.to_string();
+                let link = ctx.link().clone();
                 ctx.link().spawn(async move {
                     let url = format!(
                         "/config/notifications/matchers/{}",
@@ -868,8 +995,8 @@ impl LoadableComponent for MatcherGridComp {
     }
 
     fn toolbar(&self, ctx: &LoadableComponentContext<Self>) -> Option<Html> {
-        let selection = self.selection.selected_key();
         let link = ctx.link();
+        let disabled = self.selection.selected_key().is_none();
         Some(
             Toolbar::new()
                 .border_bottom(true)
@@ -879,14 +1006,19 @@ impl LoadableComponent for MatcherGridComp {
                 )
                 .with_child(
                     Button::new(tr!("Edit"))
-                        .disabled(selection.is_none())
+                        .disabled(disabled)
                         .on_activate(link.change_view_callback(|_| Some(MatcherViewState::Edit))),
                 )
                 .with_child(
                     Button::new(tr!("Remove"))
-                        .disabled(selection.is_none())
+                        .disabled(disabled)
                         .on_activate(link.change_view_callback(|_| Some(MatcherViewState::Remove))),
                 )
+                .with_flex_spacer()
+                .with_child({
+                    let link = ctx.link().clone();
+                    Button::refresh(self.loading()).onclick(move |_| link.send_reload())
+                })
                 .into(),
         )
     }
@@ -896,8 +1028,8 @@ impl LoadableComponent for MatcherGridComp {
         DataTable::new(
             Rc::new(vec![
                 DataTableColumn::new(tr!("Enabled"))
-                    .width("80px")
-                    .render(|v: &Value| if value_bool(v, "disable") { tr!("No") } else { tr!("Yes") }.into())
+                    .width("90px")
+                    .render(enabled_text)
                     .into(),
                 DataTableColumn::new(tr!("Matcher Name"))
                     .flex(2)
@@ -906,18 +1038,11 @@ impl LoadableComponent for MatcherGridComp {
                     .into(),
                 DataTableColumn::new(tr!("Targets"))
                     .flex(2)
-                    .render(|v: &Value| {
-                        v.get("target")
-                            .and_then(Value::as_array)
-                            .map(|a| {
-                                a.iter()
-                                    .filter_map(Value::as_str)
-                                    .collect::<Vec<_>>()
-                                    .join(", ")
-                            })
-                            .unwrap_or_default()
-                            .into()
-                    })
+                    .render(|v: &Value| value_string_list(v, "target").into())
+                    .into(),
+                DataTableColumn::new(tr!("Severity"))
+                    .flex(2)
+                    .render(|v: &Value| value_string_list(v, "match-severity").into())
                     .into(),
                 DataTableColumn::new(tr!("Comment"))
                     .flex(3)
@@ -938,41 +1063,11 @@ impl LoadableComponent for MatcherGridComp {
         view_state: &Self::ViewState,
     ) -> Option<Html> {
         match view_state {
-            MatcherViewState::Create => Some(
-                EditWindow::new(tr!("Add") + ": " + &tr!("Notification Matcher"))
-                    .min_width(700)
-                    .renderer(|_form_ctx| matcher_input_panel(true, None))
-                    .on_submit(|form_ctx: FormContext| async move {
-                        let data = matcher_submit_data(&form_ctx);
-                        http_post("/config/notifications/matchers", Some(data)).await
-                    })
-                    .on_done(ctx.link().callback(|_| MatcherMsg::Reload))
-                    .into(),
-            ),
-            MatcherViewState::Edit => self.selection.selected_key().map(|key| {
-                let name = key.to_string();
-                let url = format!(
-                    "/config/notifications/matchers/{}",
-                    percent_encode_component(&name)
-                );
-                let display_name = name.clone();
-                EditWindow::new(tr!("Edit") + ": " + &tr!("Notification Matcher"))
-                    .min_width(700)
-                    .renderer(move |_form_ctx| {
-                        matcher_input_panel(false, Some(display_name.clone()))
-                    })
-                    .loader(url.clone())
-                    .submit_digest(true)
-                    .on_submit(move |form_ctx: FormContext| {
-                        let url = url.clone();
-                        async move {
-                            let data = matcher_submit_data(&form_ctx);
-                            http_put(&url, Some(data)).await
-                        }
-                    })
-                    .on_done(ctx.link().callback(|_| MatcherMsg::Reload))
-                    .into()
-            }),
+            MatcherViewState::Create => Some(matcher_edit_dialog(ctx, None)),
+            MatcherViewState::Edit => self
+                .selection
+                .selected_key()
+                .map(|key| matcher_edit_dialog(ctx, Some(key.to_string()))),
             MatcherViewState::Remove => self.selection.selected_key().map(|key| {
                 ConfirmDialog::new(
                     tr!("Confirm"),
@@ -980,7 +1075,6 @@ impl LoadableComponent for MatcherGridComp {
                 )
                 .on_confirm({
                     let link = ctx.link().clone();
-                    let key = key.clone();
                     move |_| link.send_message(MatcherMsg::Remove(key.clone()))
                 })
                 .into()
@@ -989,67 +1083,84 @@ impl LoadableComponent for MatcherGridComp {
     }
 }
 
-fn matcher_submit_data(form_ctx: &FormContext) -> Value {
-    let mut data = form_ctx.get_submit_data();
+fn matcher_edit_dialog(
+    ctx: &LoadableComponentContext<MatcherGridComp>,
+    name: Option<String>,
+) -> Html {
+    const BASE_URL: &str = "/config/notifications/matchers";
 
-    let severities: Vec<Value> = SEVERITIES
-        .iter()
-        .filter(|(key, _)| form_ctx.read().get_field_checked(&format!("sev-{key}")))
-        .map(|(key, _)| Value::from(*key))
-        .collect();
-
-    if let Some(obj) = data.as_object_mut() {
-        for (key, _) in SEVERITIES {
-            obj.remove(&format!("sev-{key}"));
+    let window = match &name {
+        Some(name) => {
+            let url = format!("{BASE_URL}/{}", percent_encode_component(name));
+            EditWindow::new(tr!("Edit") + ": " + &tr!("Notification Matcher"))
+                .loader(url.clone())
+                .submit_digest(true)
+                .on_submit(move |form_ctx: FormContext| {
+                    let url = url.clone();
+                    async move { http_put(&url, Some(form_ctx.get_submit_data())).await }
+                })
         }
-        if !severities.is_empty() {
-            obj.insert("match-severity".to_string(), Value::Array(severities));
-        }
-    }
+        None => EditWindow::new(tr!("Add") + ": " + &tr!("Notification Matcher")).on_submit(
+            move |form_ctx: FormContext| async move {
+                http_post::<()>(BASE_URL, Some(form_ctx.get_submit_data())).await
+            },
+        ),
+    };
 
-    data
+    window
+        .min_width(700)
+        .renderer(move |_form_ctx| matcher_input_panel(name.clone()))
+        .on_done(ctx.link().callback(|_| MatcherMsg::Reload))
+        .into()
 }
 
-fn matcher_input_panel(is_create: bool, name: Option<String>) -> Html {
-    let mut panel = InputPanel::new().padding(4);
-    let (label, field) = name_field(is_create, name);
-    panel.add_field(label, field);
-    panel.add_field(tr!("Disable"), Checkbox::new().name("disable"));
+fn matcher_input_panel(name: Option<String>) -> Html {
+    let mut panel = InputPanel::new().padding(4).min_width(600);
+
+    add_name_field(&mut panel, tr!("Matcher Name"), name);
+    panel.add_right_field(tr!("Disable"), Checkbox::new().name("disable"));
+
     panel.add_field(
-        tr!("Mode"),
+        tr!("Match if"),
         Combobox::new()
             .name("mode")
             .editable(false)
             .items(Rc::new(vec!["all".into(), "any".into()]))
             .render_value(|value: &AttrValue| {
                 match value.as_str() {
-                    "all" => tr!("All rules must match"),
+                    "all" => tr!("All rules match"),
                     "any" => tr!("Any rule matches"),
-                    _ => "".into(),
+                    _ => String::new(),
                 }
                 .into()
             }),
     );
+    panel.add_right_field(tr!("Invert Match"), Checkbox::new().name("invert-match"));
 
-    let mut severity_row = Row::new().gap(3);
-    for (key, label) in SEVERITIES {
-        severity_row.add_child(Checkbox::new().name(format!("sev-{key}")).box_label(*label));
-    }
-    panel.add_large_field(false, false, tr!("Match Severity"), severity_row);
-
-    panel.add_field(
-        tr!("Match Field"),
-        StringList::new()
-            .name("match-field")
-            .placeholder(tr!("e.g. type=task, comma-separated")),
+    panel.add_large_field(
+        false,
+        false,
+        tr!("Match Severity"),
+        SeveritySelector::new().name("match-severity"),
     );
-    panel.add_field(
-        tr!("Match Calendar"),
-        StringList::new()
-            .name("match-calendar")
-            .placeholder(tr!("e.g. mon..fri 8-12, comma-separated")),
+    panel.add_large_field(
+        false,
+        false,
+        tr!("Match Field (comma separated)"),
+        StringList::new().name("match-field"),
     );
-    panel.add_field(tr!("Comment"), Field::new().name("comment"));
+    panel.add_large_field(
+        false,
+        false,
+        tr!("Match Calendar (comma separated)"),
+        StringList::new().name("match-calendar"),
+    );
+    panel.add_large_field(
+        false,
+        false,
+        tr!("Comment"),
+        Field::new().name("comment").submit_empty(false),
+    );
     panel.add_large_field(
         false,
         false,

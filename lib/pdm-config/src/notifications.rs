@@ -5,7 +5,9 @@ use anyhow::Error;
 
 use proxmox_config_digest::ConfigDigest;
 use proxmox_notify::Config;
-use proxmox_product_config::{ApiLockGuard, open_api_lockfile, replace_config, replace_privileged_config};
+use proxmox_product_config::{
+    ApiLockGuard, open_api_lockfile, replace_config, replace_privileged_config,
+};
 use proxmox_sys::fs::file_read_optional_string;
 
 use pdm_buildcfg::configdir;
