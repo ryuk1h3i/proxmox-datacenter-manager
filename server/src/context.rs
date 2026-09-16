@@ -15,6 +15,8 @@ fn default_remote_setup() {
 
 /// Dependency-inject concrete implementations needed at runtime.
 pub fn init() -> Result<(), Error> {
+    crate::notifications::init();
+
     // The subscription key pool is product-only (PDM stores its own pool of
     // keys regardless of how remotes are mocked or not), so initialise it on
     // both paths.

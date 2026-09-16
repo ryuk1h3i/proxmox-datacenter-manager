@@ -12,6 +12,7 @@ mod webauthn;
 pub use webauthn::WebauthnPanel;
 
 pub mod media;
+pub mod notifications;
 pub mod subscription_assign;
 pub mod subscription_keys;
 pub mod subscription_registry;
@@ -32,6 +33,13 @@ pub fn system_configuration() -> Html {
                 .label(tr!("WebAuthn TFA"))
                 .icon_class("fa fa-sliders"),
             |_| html! { <WebauthnPanel/> },
+        )
+        .with_item_builder(
+            TabBarItem::new()
+                .key("notifications")
+                .label(tr!("Notifications"))
+                .icon_class("fa fa-bell-o"),
+            |_| html! { <notifications::NotificationsPanel/> },
         );
 
     NavigationContainer::new().with_child(panel).into()

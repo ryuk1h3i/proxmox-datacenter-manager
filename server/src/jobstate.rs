@@ -230,6 +230,8 @@ impl Job {
         }
         .to_string();
 
+        crate::notifications::notify_task_result(&self.jobtype, &self.jobname, &state);
+
         self.state = JobState::Finished {
             upid,
             state,

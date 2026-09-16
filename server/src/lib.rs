@@ -12,6 +12,7 @@ pub mod jobstate;
 pub mod location_cache;
 pub mod metric_collection;
 pub mod namespaced_cache;
+pub mod notifications;
 pub mod parallel_fetcher;
 pub mod remote_cache;
 pub mod remote_tasks;

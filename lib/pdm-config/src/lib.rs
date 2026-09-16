@@ -9,6 +9,7 @@ pub mod certificate_config;
 pub mod domains;
 pub mod media;
 pub mod node;
+pub mod notifications;
 pub mod remotes;
 pub mod setup;
 pub mod subscriptions;

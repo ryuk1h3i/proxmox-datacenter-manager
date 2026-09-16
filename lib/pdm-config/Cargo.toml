@@ -27,5 +27,6 @@ proxmox-acme-api.workspace = true
 proxmox-serde.workspace = true
 proxmox-installer-types = { workspace = true, features = [ "api-types" ] }
 proxmox-network-types.workspace = true
+proxmox-notify.workspace = true
 pdm-api-types.workspace = true
 pdm-buildcfg.workspace = true

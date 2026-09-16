@@ -236,6 +236,10 @@ impl RemoteMappingCache {
         connection_state: ConnectionState,
     ) {
         let unreachable = matches!(&connection_state, ConnectionState::Unreachable(_));
+        let error = match &connection_state {
+            ConnectionState::Unreachable(err) => Some(err.clone()),
+            ConnectionState::Reachable => None,
+        };
 
         let found = if let Some(info) = self.info_by_hostname_mut(remote_name, hostname) {
             if let Some(next_try) = info.set_reachable(connection_state) {
@@ -245,6 +249,10 @@ impl RemoteMappingCache {
                     remote_name,
                     epoch_to_rfc2822(next_try).unwrap_or_else(|_| next_try.to_string())
                 );
+                // only notify once we actually start backing off, not on every retry
+                if let Some(error) = &error {
+                    crate::notifications::notify_remote_unreachable(remote_name, hostname, error);
+                }
             }
             true
         } else {
