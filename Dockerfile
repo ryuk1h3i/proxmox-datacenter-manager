@@ -72,7 +72,8 @@ FROM debian:trixie-slim
 ARG DEBIAN_FRONTEND=noninteractive
 
 RUN apt-get update \
-    && apt-get install -y --no-install-recommends ca-certificates tini util-linux wget \
+    && apt-get dist-upgrade -y \
+    && apt-get install -y --no-install-recommends ca-certificates jq tini util-linux wget \
     && wget -qO /usr/share/keyrings/proxmox-archive-keyring.gpg \
         https://enterprise.proxmox.com/debian/proxmox-release-trixie.gpg \
     && printf '%s\n' \
@@ -93,6 +94,16 @@ RUN apt-get install -y --no-install-recommends \
     && rm -rf /packages /var/lib/apt/lists/*
 
 COPY --chmod=0755 docker/entrypoint.sh /usr/local/bin/pdm-entrypoint
+COPY --chmod=0755 docker/update-check.sh /usr/local/bin/pdm-update-check
+
+ARG PDM_IMAGE_REPOSITORY=""
+ARG PDM_IMAGE_REVISION=""
+ARG PDM_IMAGE_CREATED=""
+
+ENV PDM_IMAGE_REGISTRY="ghcr.io" \
+    PDM_IMAGE_REPOSITORY="${PDM_IMAGE_REPOSITORY}" \
+    PDM_IMAGE_REVISION="${PDM_IMAGE_REVISION}" \
+    PDM_IMAGE_CREATED="${PDM_IMAGE_CREATED}"
 
 EXPOSE 8443
 VOLUME ["/etc/proxmox-datacenter-manager", "/var/lib/proxmox-datacenter-manager", "/var/cache/proxmox-datacenter-manager", "/var/log/proxmox-datacenter-manager"]

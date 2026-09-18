@@ -12,7 +12,7 @@ use yew::html::{IntoEventCallback, IntoPropValue};
 use yew::virtual_dom::{VComp, VNode};
 
 use pwt::state::{Loader, Theme, ThemeObserver};
-use pwt::widget::{Button, Container, Row, ThemeModeSelector, Tooltip};
+use pwt::widget::{Button, Container, Fa, Row, ThemeModeSelector, Tooltip};
 
 use proxmox_yew_comp::RunningTasksButton;
 use proxmox_yew_comp::utils::set_location_href;
@@ -22,6 +22,7 @@ use pwt_macros::builder;
 
 use pbs_api_types::TaskListItem;
 use pdm_api_types::RemoteUpid;
+use pdm_api_types::update::ImageUpdateStatus;
 
 use crate::tasks::format_optional_remote_upid;
 use crate::widget::SearchBox;
@@ -35,6 +36,10 @@ pub struct VersionInfo {
 
 async fn load_version() -> Result<VersionInfo, Error> {
     http_get("/version", None).await
+}
+
+async fn load_update_status() -> Result<ImageUpdateStatus, Error> {
+    http_get("/update-status", None).await
 }
 
 #[derive(Clone, PartialEq, Properties)]
@@ -67,6 +72,7 @@ pub enum Msg {
     ThemeChanged((Theme, /* dark_mode */ bool)),
     Load,
     LoadResult(Result<VersionInfo, Error>),
+    UpdateStatusResult(Option<ImageUpdateStatus>),
     ChangeView(Option<ViewState>),
 }
 
@@ -74,6 +80,7 @@ pub struct PdmTopNavBar {
     _theme_observer: ThemeObserver,
     dark_mode: bool,
     version_info: Option<VersionInfo>,
+    update_status: Option<ImageUpdateStatus>,
     view_state: Option<ViewState>,
     abort_guard: Option<AsyncAbortGuard>,
 }
@@ -96,6 +103,7 @@ impl Component for PdmTopNavBar {
             _theme_observer,
             dark_mode,
             version_info: None,
+            update_status: None,
             view_state: None,
             abort_guard: None,
         }
@@ -108,6 +116,7 @@ impl Component for PdmTopNavBar {
                 ctx.link().send_message(Msg::Load);
             } else {
                 self.version_info = None;
+                self.update_status = None;
             }
         }
         true
@@ -126,8 +135,14 @@ impl Component for PdmTopNavBar {
             Msg::Load => {
                 let link = ctx.link().clone();
                 self.abort_guard.replace(AsyncAbortGuard::spawn(async move {
-                    link.send_message(Msg::LoadResult(load_version().await))
+                    link.send_message(Msg::LoadResult(load_version().await));
+                    // only users with system audit privileges may see this
+                    link.send_message(Msg::UpdateStatusResult(load_update_status().await.ok()));
                 }));
+                true
+            }
+            Msg::UpdateStatusResult(status) => {
+                self.update_status = status;
                 true
             }
             Msg::LoadResult(result) => {
@@ -279,6 +294,27 @@ impl Component for PdmTopNavBar {
                     .padding_x(4)
                     .with_child(text)
             })
+            .with_optional_child(self.update_status.as_ref().and_then(|status| {
+                status.update_available.then(|| {
+                    Tooltip::new(
+                        Row::new()
+                            .class("pwt-align-items-center")
+                            .class(ColorScheme::Warning)
+                            .gap(1)
+                            .with_child(Fa::new("arrow-circle-up"))
+                            .with_child(tr!("Update available")),
+                    )
+                    .tip(match &status.image {
+                        Some(image) => tr!(
+                            "A newer image was published on {0}. Pull it and recreate the container to update.",
+                            image
+                        ),
+                        None => tr!(
+                            "A newer image was published. Pull it and recreate the container to update."
+                        ),
+                    })
+                })
+            }))
             .with_flex_spacer()
             .with_child(SearchBox::new())
             .with_flex_spacer()

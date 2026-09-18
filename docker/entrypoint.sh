@@ -8,6 +8,9 @@ SOCKET=/run/proxmox-datacenter-manager/priv.sock
 API_GROUP=www-data
 API_USER=www-data
 
+UPDATE_CHECK=${PDM_UPDATE_CHECK:-on}
+UPDATE_CHECK_INTERVAL=${PDM_UPDATE_CHECK_INTERVAL:-86400}
+
 # Volumes and bind mounts show up as root:root 0755, but the services abort
 # unless the mount points already carry the exact ownership and mode they
 # would get from the Debian packaging.
@@ -28,6 +31,9 @@ prepare_dir /run/proxmox-datacenter-manager "root:$API_GROUP" 1770
 privileged_pid=$!
 
 shutdown() {
+    if [ -n "${update_check_pid:-}" ]; then
+        kill -TERM "$update_check_pid" 2>/dev/null || true
+    fi
     if [ -n "${api_pid:-}" ]; then
         kill -TERM "$api_pid" 2>/dev/null || true
         wait "$api_pid" 2>/dev/null || true
@@ -40,6 +46,17 @@ shutdown() {
 
 api_pid=
 trap shutdown INT TERM EXIT
+
+# The container cannot update itself, so this only records whether a newer image
+# was published; it must never keep the services from starting.
+update_check_pid=
+if [ "$UPDATE_CHECK" != "off" ]; then
+    while true; do
+        /usr/local/bin/pdm-update-check || true
+        sleep "$UPDATE_CHECK_INTERVAL"
+    done &
+    update_check_pid=$!
+fi
 
 attempt=0
 while [ ! -S "$SOCKET" ]; do

@@ -6,6 +6,9 @@ services:
     restart: unless-stopped
     ports:
       - "8443:8443"
+    environment:
+      PDM_UPDATE_CHECK: ${PDM_UPDATE_CHECK:-on}
+      PDM_UPDATE_CHANNEL: ${PDM_UPDATE_CHANNEL:-latest}
     secrets:
       - pdm-admin-password
     volumes:

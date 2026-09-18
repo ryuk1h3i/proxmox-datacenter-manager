@@ -21,6 +21,7 @@ pub mod resources;
 mod rrd_common;
 pub mod sdn;
 pub mod subscriptions;
+pub mod update;
 
 #[sortable]
 const SUBDIRS: SubdirMap = &sorted!([
@@ -37,6 +38,7 @@ const SUBDIRS: SubdirMap = &sorted!([
     ("nodes", &nodes::ROUTER),
     ("sdn", &sdn::ROUTER),
     ("subscriptions", &subscriptions::ROUTER),
+    ("update-status", &update::ROUTER),
     ("version", &Router::new().get(&API_METHOD_VERSION)),
 ]);
 
