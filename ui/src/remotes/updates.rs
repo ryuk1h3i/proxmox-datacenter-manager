@@ -19,11 +19,11 @@ use proxmox_deb_version;
 
 use proxmox_yew_comp::{
     AptPackageManager, AptRepositories, ExistingProduct, LoadableComponent,
-    LoadableComponentContext, LoadableComponentMaster, LoadableComponentScopeExt,
-    LoadableComponentState,
+    LoadableComponentContext, LoadableComponentMaster, LoadableComponentScope,
+    LoadableComponentScopeExt, LoadableComponentState,
 };
 use pwt::props::{CssBorderBuilder, CssPaddingBuilder, WidgetStyleBuilder};
-use pwt::widget::{Button, Container, Panel, Progress, Tooltip};
+use pwt::widget::{ActionIcon, Button, Container, Panel, Progress, Tooltip};
 use pwt::{
     css,
     css::FontColor,
@@ -36,7 +36,7 @@ use pwt::{
     },
 };
 
-use crate::{get_deep_url, get_deep_url_low_level, pdm_client};
+use crate::{get_deep_url_low_level, pdm_client};
 
 #[derive(PartialEq, Properties)]
 pub struct UpdateTree {}
@@ -145,9 +145,10 @@ fn default_sorter(a: &UpdateTreeEntry, b: &UpdateTreeEntry) -> Ordering {
 
 impl UpdateTreeComponent {
     fn columns(
-        _ctx: &LoadableComponentContext<Self>,
+        ctx: &LoadableComponentContext<Self>,
         store: TreeStore<UpdateTreeEntry>,
     ) -> Rc<Vec<DataTableHeader<UpdateTreeEntry>>> {
+        let link = ctx.link().clone();
         Rc::new(vec![
             DataTableColumn::new(tr!("Name"))
                 .tree_column(store)
@@ -198,8 +199,69 @@ impl UpdateTreeComponent {
                     },
                 ))
                 .into(),
+            DataTableColumn::new(tr!("Actions"))
+                .width("80px")
+                .justify("center")
+                .render(move |entry: &UpdateTreeEntry| render_upgrade_action(&link, entry))
+                .into(),
         ])
     }
+}
+
+/// Open the upgrade shell of a node in the web interface of its own remote.
+///
+/// The remote only runs the upgrade command for a `root@pam` session, which PDM's shell proxy
+/// cannot provide (it authenticates with an API token), so the console of the remote is used.
+fn open_upgrade_shell(
+    link: &LoadableComponentScope<UpdateTreeComponent>,
+    remote: &str,
+    node: &str,
+) {
+    let Some(url) = get_deep_url_low_level(link, remote, None, "") else {
+        return;
+    };
+
+    url.set_search(&format!("console=upgrade&xtermjs=1&node={node}"));
+
+    let _ = gloo_utils::window().open_with_url_and_target_and_features(
+        &url.href(),
+        "_blank",
+        "toolbar=no,location=no,status=no,menubar=no,resizable=yes,width=800,height=420",
+    );
+}
+
+fn render_upgrade_action(
+    link: &LoadableComponentScope<UpdateTreeComponent>,
+    entry: &UpdateTreeEntry,
+) -> Html {
+    let node_entry = match entry {
+        UpdateTreeEntry::Node(node_entry) => node_entry,
+        _ => return html!(),
+    };
+
+    if node_entry.summary.status != NodeUpdateStatus::Success {
+        return html!();
+    }
+
+    let has_updates = node_entry.summary.number_of_updates > 0;
+    let link = link.clone();
+    let remote = node_entry.remote.clone();
+    let node = node_entry.node.clone();
+
+    let tip = if has_updates {
+        tr!("Open an upgrade shell for this node")
+    } else {
+        tr!("No updates available")
+    };
+
+    Tooltip::new(
+        ActionIcon::new("fa fa-fw fa-arrow-circle-o-up")
+            .disabled(!has_updates)
+            .aria_label(tr!("Upgrade"))
+            .on_activate(move |_| open_upgrade_shell(&link, &remote, &node)),
+    )
+    .tip(tip)
+    .into()
 }
 
 fn build_store_from_response(update_summary: UpdateSummary) -> SlabTree<UpdateTreeEntry> {
@@ -500,28 +562,10 @@ impl UpdateTreeComponent {
                         .enable_upgrade(true)
                         .subscription_url(subscription_url.clone())
                         .on_upgrade({
-                            let remote = remote.clone();
                             let link = ctx.link().clone();
                             let remote = remote.clone();
                             let node = node.clone();
-                            let ty = *ty;
-
-                            move |_| match ty {
-                                RemoteType::Pve => {
-                                    let id = format!("node/{node}::apt");
-                                    if let Some(url) = get_deep_url(&link, &remote, None, &id) {
-                                        let _ = gloo_utils::window().open_with_url(&url.href());
-                                    }
-                                }
-                                RemoteType::Pbs => {
-                                    let hash = "#pbsServerAdministration:updates";
-                                    if let Some(url) =
-                                        get_deep_url_low_level(&link, &remote, None, hash)
-                                    {
-                                        let _ = gloo_utils::window().open_with_url(&url.href());
-                                    }
-                                }
-                            }
+                            move |_| open_upgrade_shell(&link, &remote, &node)
                         });
 
                     let product = match ty {
