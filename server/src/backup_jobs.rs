@@ -194,6 +194,23 @@ fn normalized_vmid_list(value: Option<&Value>) -> Vec<u32> {
     list
 }
 
+/// PVE takes property strings like `prune-backups` on POST/PUT, but returns them as objects.
+fn normalized_property_string(value: Option<&Value>) -> Option<String> {
+    let text = match value? {
+        Value::String(value) => value.clone(),
+        Value::Object(map) => crate::api::pve::backup::property_string_from_object(map),
+        _ => return None,
+    };
+
+    let mut parts: Vec<&str> = text
+        .split(',')
+        .map(str::trim)
+        .filter(|part| !part.is_empty())
+        .collect();
+    parts.sort_unstable();
+    Some(parts.join(","))
+}
+
 /// Compare the job currently configured on PVE with what PDM wants it to be.
 fn is_in_sync(existing: &Value, desired: &Value) -> bool {
     if normalized_vmid_list(existing.get("vmid")) != normalized_vmid_list(desired.get("vmid")) {
@@ -206,12 +223,18 @@ fn is_in_sync(existing: &Value, desired: &Value) -> bool {
         return false;
     }
 
+    let desired_prune = normalized_property_string(desired.get("prune-backups"));
+    if desired_prune.is_some()
+        && desired_prune != normalized_property_string(existing.get("prune-backups"))
+    {
+        return false;
+    }
+
     for key in [
         "schedule",
         "storage",
         "mode",
         "compress",
-        "prune-backups",
         "notes-template",
         "mailto",
         "mailnotification",

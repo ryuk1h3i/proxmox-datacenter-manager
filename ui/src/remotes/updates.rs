@@ -36,7 +36,7 @@ use pwt::{
     },
 };
 
-use crate::{get_deep_url_low_level, pdm_client};
+use crate::{get_deep_url_low_level, get_remote, pdm_client};
 
 #[derive(PartialEq, Properties)]
 pub struct UpdateTree {}
@@ -208,26 +208,32 @@ impl UpdateTreeComponent {
     }
 }
 
-/// Open the upgrade shell of a node in the web interface of its own remote.
+/// Open the package update panel of a node in the web interface of its own remote.
 ///
 /// The remote only runs the upgrade command for a `root@pam` session, which PDM's shell proxy
-/// cannot provide (it authenticates with an API token), so the console of the remote is used.
+/// cannot provide (it authenticates with an API token). Its console cannot be linked directly
+/// either: without an existing session on that host, pveproxy answers `401 no ticket`. So the
+/// regular update panel is opened, which goes through the normal login flow and offers the
+/// upgrade shell itself.
 fn open_upgrade_shell(
     link: &LoadableComponentScope<UpdateTreeComponent>,
     remote: &str,
     node: &str,
 ) {
-    let Some(url) = get_deep_url_low_level(link, remote, None, "") else {
+    let Some(remote_entry) = get_remote(link, remote) else {
         return;
     };
 
-    url.set_search(&format!("console=upgrade&xtermjs=1&node={node}"));
+    let hash = match remote_entry.ty {
+        RemoteType::Pve => format!("v1::=node/{node}::apt"),
+        RemoteType::Pbs => "#pbsServerAdministration:updates".to_string(),
+    };
 
-    let _ = gloo_utils::window().open_with_url_and_target_and_features(
-        &url.href(),
-        "_blank",
-        "toolbar=no,location=no,status=no,menubar=no,resizable=yes,width=800,height=420",
-    );
+    let Some(url) = get_deep_url_low_level(link, remote, None, &hash) else {
+        return;
+    };
+
+    let _ = gloo_utils::window().open_with_url(&url.href());
 }
 
 fn render_upgrade_action(
@@ -249,7 +255,7 @@ fn render_upgrade_action(
     let node = node_entry.node.clone();
 
     let tip = if has_updates {
-        tr!("Open an upgrade shell for this node")
+        tr!("Open the update panel of this node on its remote")
     } else {
         tr!("No updates available")
     };

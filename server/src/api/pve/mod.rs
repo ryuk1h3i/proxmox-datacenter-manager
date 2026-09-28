@@ -36,7 +36,7 @@ use crate::remote_tasks;
 use crate::remote_updates::get_available_updates_for_remote;
 
 mod firewall;
-mod backup;
+pub(crate) mod backup;
 mod lxc;
 mod node;
 mod qemu;
@@ -81,6 +81,7 @@ const REMOTE_SUBDIRS: SubdirMap = &sorted!([
     ("options", &OPTIONS_ROUTER),
     ("qemu", &qemu::ROUTER),
     ("replication", &replication::ROUTER),
+    ("replication-status", &replication::STATUS_ROUTER),
     ("resources", &RESOURCES_ROUTER),
     ("cluster-nextid", &NEXTID_ROUTER),
     ("cluster-status", &STATUS_ROUTER),

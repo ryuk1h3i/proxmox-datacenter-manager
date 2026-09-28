@@ -39,6 +39,58 @@ fn encode_id(id: &str) -> String {
     percent_encoding::percent_encode(id.as_bytes(), percent_encoding::NON_ALPHANUMERIC).to_string()
 }
 
+/// Render a PVE property string from the object form PVE returns it in.
+pub(crate) fn property_string_from_object(map: &serde_json::Map<String, Value>) -> String {
+    map.iter()
+        .map(|(key, value)| match value {
+            Value::String(value) => format!("{key}={value}"),
+            Value::Bool(value) => format!("{key}={}", u8::from(*value)),
+            value => format!("{key}={value}"),
+        })
+        .collect::<Vec<_>>()
+        .join(",")
+}
+
+/// PVE encodes booleans as 0/1 (and sometimes as strings) outside of JSON schema validation.
+pub(crate) fn normalize_bool(map: &mut serde_json::Map<String, Value>, key: &str) {
+    let Some(entry) = map.get_mut(key) else {
+        return;
+    };
+    let value = match entry {
+        Value::Number(number) => number.as_i64().map(|number| number != 0),
+        Value::String(value) => match value.as_str() {
+            "1" | "on" | "yes" | "true" => Some(true),
+            "0" | "off" | "no" | "false" => Some(false),
+            _ => None,
+        },
+        _ => None,
+    };
+    if let Some(value) = value {
+        *entry = Value::Bool(value);
+    }
+}
+
+/// `prune-backups`, `performance` and `fleecing` are property strings on POST/PUT, but objects
+/// in the responses of `cluster/backup`.
+fn normalize_backup_job(value: &mut Value) {
+    let Some(map) = value.as_object_mut() else {
+        return;
+    };
+
+    for key in ["prune-backups", "performance", "fleecing"] {
+        if let Some(entry) = map.get_mut(key) {
+            if let Value::Object(object) = entry {
+                let flattened = property_string_from_object(object);
+                *entry = Value::String(flattened);
+            }
+        }
+    }
+
+    for key in ["enabled", "all", "repeat-missed"] {
+        normalize_bool(map, key);
+    }
+}
+
 #[api(
     input: { properties: { remote: { schema: REMOTE_ID_SCHEMA } } },
     returns: {
@@ -53,11 +105,20 @@ fn encode_id(id: &str) -> String {
 /// List scheduled backup jobs on a PVE remote.
 pub async fn list_backup_jobs(remote: String) -> Result<Vec<PveBackupJob>, Error> {
     let client = raw_client_to_remote_by_id(&remote)?;
-    Ok(client
+    let mut data = client
         .get("/api2/extjs/cluster/backup")
         .await?
-        .expect_json()?
-        .data)
+        .expect_json::<Value>()?
+        .data;
+
+    let Some(jobs) = data.as_array_mut() else {
+        return Ok(Vec::new());
+    };
+    for job in jobs.iter_mut() {
+        normalize_backup_job(job);
+    }
+
+    Ok(serde_json::from_value(data)?)
 }
 
 #[api(
@@ -100,7 +161,9 @@ pub async fn create_backup_job(
 pub async fn get_backup_job(remote: String, id: String) -> Result<PveBackupJob, Error> {
     let client = raw_client_to_remote_by_id(&remote)?;
     let path = format!("/api2/extjs/cluster/backup/{}", encode_id(&id));
-    Ok(client.get(&path).await?.expect_json()?.data)
+    let mut data = client.get(&path).await?.expect_json::<Value>()?.data;
+    normalize_backup_job(&mut data);
+    Ok(serde_json::from_value(data)?)
 }
 
 #[api(

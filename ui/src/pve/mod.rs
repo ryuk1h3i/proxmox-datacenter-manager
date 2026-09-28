@@ -31,6 +31,7 @@ use crate::{LoadResult, extract_package_version, get_deep_url, get_remote};
 
 mod appliance_window;
 pub mod lxc;
+mod job_history;
 mod jobs;
 pub mod node;
 pub mod qemu;

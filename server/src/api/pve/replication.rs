@@ -1,4 +1,5 @@
 use anyhow::Error;
+use serde_json::Value;
 
 use proxmox_client::HttpApiClient;
 use proxmox_router::{Permission, Router, SubdirMap, list_subdirs_api_method};
@@ -14,12 +15,16 @@ use pdm_api_types::{
     PRIV_RESOURCE_MANAGE, RemoteUpid,
 };
 
-use super::{new_remote_upid, raw_client_to_remote_by_id};
+use pve_api_types::ClusterNodeIndexResponseStatus;
+
+use super::{connect_to_remote_by_id, new_remote_upid, raw_client_to_remote_by_id};
 
 pub const ROUTER: Router = Router::new()
     .get(&API_METHOD_LIST_REPLICATION_JOBS)
     .post(&API_METHOD_CREATE_REPLICATION_JOB)
     .match_all("id", &ITEM_ROUTER);
+
+pub const STATUS_ROUTER: Router = Router::new().get(&API_METHOD_LIST_REPLICATION_STATUS);
 
 const ITEM_ROUTER: Router = Router::new()
     .get(&list_subdirs_api_method!(ITEM_SUBDIRS))
@@ -44,6 +49,56 @@ fn encode_id(id: &str) -> String {
     percent_encoding::percent_encode(id.as_bytes(), percent_encoding::NON_ALPHANUMERIC).to_string()
 }
 
+fn normalize_replication_job(value: &mut Value) {
+    if let Some(map) = value.as_object_mut() {
+        super::backup::normalize_bool(map, "disable");
+    }
+}
+
+#[api(
+    input: { properties: { remote: { schema: REMOTE_ID_SCHEMA } } },
+    returns: {
+        description: "Runtime state of the replication jobs.",
+        type: Array,
+        items: { type: PveReplicationStatus },
+    },
+    access: {
+        permission: &Permission::Privilege(&["resource", "{remote}"], PRIV_RESOURCE_AUDIT, false),
+    },
+)]
+/// List the runtime state of every replication job of a PVE remote.
+///
+/// PVE only reports it per node, so every online node has to be queried.
+pub async fn list_replication_status(remote: String) -> Result<Vec<PveReplicationStatus>, Error> {
+    let nodes = connect_to_remote_by_id(&remote)?.list_nodes().await?;
+    let client = raw_client_to_remote_by_id(&remote)?;
+
+    let mut result = Vec::new();
+    for node in nodes {
+        if node.status != ClusterNodeIndexResponseStatus::Online {
+            continue;
+        }
+
+        let path = format!("/api2/extjs/nodes/{}/replication", node.node);
+        let data = match client.get(&path).await {
+            Ok(response) => response.expect_json::<Value>()?.data,
+            // a single unreachable node must not hide the state of the others
+            Err(_) => continue,
+        };
+
+        let Value::Array(entries) = data else {
+            continue;
+        };
+        for entry in entries {
+            if let Ok(status) = serde_json::from_value::<PveReplicationStatus>(entry) {
+                result.push(status);
+            }
+        }
+    }
+
+    Ok(result)
+}
+
 #[api(
     input: { properties: { remote: { schema: REMOTE_ID_SCHEMA } } },
     returns: {
@@ -58,11 +113,20 @@ fn encode_id(id: &str) -> String {
 /// List native intra-cluster PVE replication jobs.
 pub async fn list_replication_jobs(remote: String) -> Result<Vec<PveReplicationJob>, Error> {
     let client = raw_client_to_remote_by_id(&remote)?;
-    Ok(client
+    let mut data = client
         .get("/api2/extjs/cluster/replication")
         .await?
-        .expect_json()?
-        .data)
+        .expect_json::<Value>()?
+        .data;
+
+    let Some(jobs) = data.as_array_mut() else {
+        return Ok(Vec::new());
+    };
+    for job in jobs.iter_mut() {
+        normalize_replication_job(job);
+    }
+
+    Ok(serde_json::from_value(data)?)
 }
 
 #[api(
@@ -81,7 +145,9 @@ pub async fn list_replication_jobs(remote: String) -> Result<Vec<PveReplicationJ
 pub async fn get_replication_job(remote: String, id: String) -> Result<PveReplicationJob, Error> {
     let client = raw_client_to_remote_by_id(&remote)?;
     let path = format!("/api2/extjs/cluster/replication/{}", encode_id(&id));
-    Ok(client.get(&path).await?.expect_json()?.data)
+    let mut data = client.get(&path).await?.expect_json::<Value>()?.data;
+    normalize_replication_job(&mut data);
+    Ok(serde_json::from_value(data)?)
 }
 
 #[api(

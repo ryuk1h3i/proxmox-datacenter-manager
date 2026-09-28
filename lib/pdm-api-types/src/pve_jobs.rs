@@ -55,6 +55,15 @@ pub struct PveBackupJob {
     /// Backup notes template.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub notes_template: Option<String>,
+    /// Description of the job.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub comment: Option<String>,
+    /// Run the job as soon as possible if its schedule was missed.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub repeat_missed: Option<bool>,
+    /// UNIX epoch of the next scheduled run.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub next_run: Option<i64>,
 }
 
 /// Editable parameters for a scheduled PVE backup job.
@@ -110,6 +119,12 @@ pub struct PveBackupJobConfig {
     /// Backup notes template.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub notes_template: Option<String>,
+    /// Description of the job.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub comment: Option<String>,
+    /// Run the job as soon as possible if its schedule was missed.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub repeat_missed: Option<bool>,
 }
 
 /// Parameters for an immediate PVE vzdump run.
@@ -204,15 +219,19 @@ pub struct PveReplicationJobConfig {
 }
 
 /// Runtime state for a native PVE replication job.
+///
+/// Note: PVE spells the fields of this endpoint with underscores.
 #[api]
 #[derive(Clone, Debug, Deserialize, PartialEq, Serialize)]
-#[serde(rename_all = "kebab-case")]
 pub struct PveReplicationStatus {
     /// Replication job identifier.
     pub id: String,
     /// Target PVE node.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub target: Option<String>,
+    /// Source PVE node.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub source: Option<String>,
     /// Time of the previous replication run.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub last_sync: Option<i64>,

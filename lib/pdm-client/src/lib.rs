@@ -2037,6 +2037,15 @@ impl<T: HttpApiClient> PdmClient<T> {
         Ok(self.0.get(&path).await?.expect_json()?.data)
     }
 
+    /// Runtime state of every replication job of a remote, collected from all its nodes.
+    pub async fn pve_list_replication_status(
+        &self,
+        remote: &str,
+    ) -> Result<Vec<PveReplicationStatus>, Error> {
+        let path = format!("/api2/extjs/pve/remotes/{remote}/replication-status");
+        Ok(self.0.get(&path).await?.expect_json()?.data)
+    }
+
     pub async fn pve_create_replication_job(
         &self,
         remote: &str,

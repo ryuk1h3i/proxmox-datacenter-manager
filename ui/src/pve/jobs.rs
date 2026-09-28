@@ -1,12 +1,15 @@
+use std::collections::HashMap;
 use std::future::Future;
 use std::pin::Pin;
 use std::rc::Rc;
 
 use anyhow::{Error, bail};
+use serde_json::json;
 use yew::virtual_dom::{Key, VComp, VNode};
 
 use proxmox_yew_comp::form::delete_empty_values;
 use proxmox_yew_comp::percent_encoding::percent_encode_component;
+use proxmox_yew_comp::utils::{format_duration_human, render_epoch};
 use proxmox_yew_comp::{
     EditWindow, LoadableComponent, LoadableComponentContext, LoadableComponentMaster,
     LoadableComponentScopeExt, LoadableComponentState, http_delete, http_get, http_post, http_put,
@@ -19,9 +22,11 @@ use pwt::widget::form::{Checkbox, Combobox, DisplayField, Field, FormContext, Nu
 use pwt::widget::{Button, ConfirmDialog, InputPanel, TabBarItem, TabPanel, Toolbar};
 
 use pdm_api_types::pve_jobs::{
-    PveBackupJob, PveBackupJobConfig, PveReplicationJob, PveVzdumpRequest,
+    PveBackupJob, PveBackupJobConfig, PveReplicationJob, PveReplicationStatus, PveVzdumpRequest,
 };
 use pdm_api_types::RemoteUpid;
+
+use super::job_history::JobHistory;
 
 #[derive(Clone, PartialEq, Properties)]
 pub struct PveJobsPanel {
@@ -100,6 +105,7 @@ enum JobViewState {
     Create,
     Edit,
     Remove,
+    History,
 }
 
 enum BackupMsg {
@@ -107,6 +113,7 @@ enum BackupMsg {
     Reload,
     Remove(Key),
     Run(Key),
+    SetEnabled(String, bool),
     ShowTask(RemoteUpid),
 }
 
@@ -118,6 +125,13 @@ struct BackupJobsComp {
 }
 
 pwt::impl_deref_mut_property!(BackupJobsComp, state, LoadableComponentState<JobViewState>);
+
+impl BackupJobsComp {
+    fn selected_job(&self) -> Option<PveBackupJob> {
+        let key = self.selection.selected_key()?;
+        self.store.read().lookup_record(&key).cloned()
+    }
+}
 
 impl LoadableComponent for BackupJobsComp {
     type Properties = BackupJobs;
@@ -135,11 +149,14 @@ impl LoadableComponent for BackupJobsComp {
             selection,
             columns: Rc::new(vec![
                 DataTableColumn::new("ID").flex(1).get_property(|job: &PveBackupJob| job.id.as_str()).into(),
+                DataTableColumn::new(tr!("Enabled")).width("90px").justify("center").get_property_owned(|job: &PveBackupJob| if job.enabled.unwrap_or(true) { tr!("Yes") } else { tr!("No") }).into(),
                 DataTableColumn::new(tr!("Schedule")).flex(1).get_property_owned(|job: &PveBackupJob| job.schedule.clone().unwrap_or_default()).into(),
+                DataTableColumn::new(tr!("Next Run")).width("170px").get_property_owned(|job: &PveBackupJob| job.next_run.map(render_epoch).unwrap_or_default()).into(),
                 DataTableColumn::new(tr!("Node")).flex(1).get_property_owned(|job: &PveBackupJob| job.node.clone().unwrap_or_else(|| tr!("All"))).into(),
                 DataTableColumn::new(tr!("Guests")).flex(2).get_property_owned(|job: &PveBackupJob| backup_scope(job)).into(),
                 DataTableColumn::new(tr!("Storage")).flex(1).get_property_owned(|job: &PveBackupJob| job.storage.clone().unwrap_or_default()).into(),
                 DataTableColumn::new(tr!("Mode")).width("100px").get_property_owned(|job: &PveBackupJob| job.mode.clone().unwrap_or_default()).into(),
+                DataTableColumn::new(tr!("Comment")).flex(2).get_property_owned(|job: &PveBackupJob| job.comment.clone().unwrap_or_default()).into(),
             ]),
         }
     }
@@ -154,6 +171,17 @@ impl LoadableComponent for BackupJobsComp {
             BackupMsg::ShowTask(upid) => {
                 self.set_task_base_url(format!("/pve/remotes/{}/tasks", upid.remote()).into());
                 ctx.link().show_task_progress(upid.to_string());
+            }
+            BackupMsg::SetEnabled(id, enabled) => {
+                let remote = ctx.props().remote.clone();
+                let link = ctx.link().clone();
+                ctx.link().spawn(async move {
+                    let path = format!("/pve/remotes/{remote}/backup/{}", percent_encode_component(&id));
+                    if let Err(err) = http_put::<()>(path, Some(json!({ "enabled": enabled }))).await {
+                        link.show_error(tr!("Error"), err.to_string(), true);
+                    }
+                    link.send_message(BackupMsg::Reload);
+                });
             }
             BackupMsg::Remove(key) => {
                 let remote = ctx.props().remote.clone();
@@ -201,12 +229,23 @@ impl LoadableComponent for BackupJobsComp {
     fn toolbar(&self, ctx: &LoadableComponentContext<Self>) -> Option<Html> {
         let selected = self.selection.selected_key();
         let run_selected = selected.clone();
+        let selected_job = self.selected_job();
+        let enabled = selected_job.as_ref().is_some_and(|job| job.enabled.unwrap_or(true));
         Some(Toolbar::new().border_bottom(true)
             .with_child(Button::new(tr!("Add")).icon_class("fa fa-plus").on_activate(ctx.link().change_view_callback(|_| Some(JobViewState::Create))))
             .with_child(Button::new(tr!("Edit")).icon_class("fa fa-pencil").disabled(selected.is_none()).on_activate(ctx.link().change_view_callback(|_| Some(JobViewState::Edit))))
             .with_child(Button::new(tr!("Run now")).icon_class("fa fa-play").disabled(selected.is_none()).on_activate({ let link = ctx.link().clone(); move |_| if let Some(key) = run_selected.clone() { link.send_message(BackupMsg::Run(key)); } }))
+            .with_child(Button::new(if enabled { tr!("Disable") } else { tr!("Enable") })
+                .icon_class(if enabled { "fa fa-ban" } else { "fa fa-check" })
+                .disabled(selected_job.is_none())
+                .on_activate({
+                    let link = ctx.link().clone();
+                    let id = selected_job.as_ref().map(|job| job.id.clone());
+                    move |_| if let Some(id) = id.clone() { link.send_message(BackupMsg::SetEnabled(id, !enabled)); }
+                }))
             .with_child(Button::new(tr!("Remove")).icon_class("fa fa-trash").disabled(selected.is_none()).on_activate(ctx.link().change_view_callback(|_| Some(JobViewState::Remove))))
             .with_flex_spacer()
+            .with_child(Button::new(tr!("History")).icon_class("fa fa-history").on_activate(ctx.link().change_view_callback(|_| Some(JobViewState::History))))
             .with_child(Button::refresh(self.loading()).on_activate({ let link = ctx.link().clone(); move |_| link.send_reload() }))
             .into())
     }
@@ -235,6 +274,11 @@ impl LoadableComponent for BackupJobsComp {
             JobViewState::Create => Some(backup_editor(remote, None, ctx.link().callback(|_| BackupMsg::Reload))),
             JobViewState::Edit => self.selection.selected_key().map(|key| backup_editor(remote, Some(key.to_string()), ctx.link().callback(|_| BackupMsg::Reload))),
             JobViewState::Remove => self.selection.selected_key().map(|key| ConfirmDialog::new(tr!("Confirm"), tr!("Remove backup job '{0}'?", key.to_string())).on_confirm({ let link = ctx.link().clone(); move |_| link.send_message(BackupMsg::Remove(key.clone())) }).into()),
+            JobViewState::History => Some(
+                JobHistory::new(remote, "vzdump", tr!("Backup Task History"))
+                    .on_close(ctx.link().change_view_callback(|_| None))
+                    .into(),
+            ),
         }
     }
 }
@@ -253,7 +297,7 @@ fn backup_editor(remote: String, id: Option<String>, done: Callback<()>) -> Html
             let remote = remote.clone();
             let id = id.clone();
             move |ctx: FormContext| {
-                let mut data = delete_empty_values(&ctx.get_submit_data(), &["id", "node", "pool", "vmid", "storage", "schedule", "mode", "compress", "bwlimit", "prune-backups", "notes-template", "mailto", "mailnotification"], true);
+                let mut data = delete_empty_values(&ctx.get_submit_data(), &["id", "node", "pool", "vmid", "storage", "schedule", "mode", "compress", "bwlimit", "prune-backups", "notes-template", "mailto", "mailnotification", "comment"], true);
                 let remote = remote.clone();
                 let id = id.clone();
                 async move {
@@ -287,6 +331,7 @@ fn backup_input_panel(_ctx: &FormContext, id: Option<String>) -> Html {
         .with_right_field(tr!("Bandwidth limit (KiB/s)"), Number::new().name("bwlimit").min(0u64))
         .with_large_field(tr!("Retention"), Field::new().name("prune-backups").placeholder("keep-last=3,keep-weekly=4"))
         .with_large_field(tr!("Notes template"), Field::new().name("notes-template"))
+        .with_large_field(tr!("Comment"), Field::new().name("comment"))
         .with_field(tr!("All guests"), Checkbox::new().name("all"))
         .with_right_field(tr!("Enabled"), Checkbox::new().name("enabled").default(true))
         .into()
@@ -297,9 +342,31 @@ struct ReplicationJobs { remote: String }
 impl ReplicationJobs { fn new(remote: String) -> Self { yew::props!(Self { remote }) } }
 impl From<ReplicationJobs> for VNode { fn from(value: ReplicationJobs) -> Self { VComp::new::<LoadableComponentMaster<ReplicationJobsComp>>(Rc::new(value), None).into() } }
 
-enum ReplicationMsg { Loaded(Vec<PveReplicationJob>), Reload, Remove(Key), Run(Key), ShowTask(RemoteUpid) }
-struct ReplicationJobsComp { state: LoadableComponentState<JobViewState>, store: Store<PveReplicationJob>, selection: Selection, columns: Rc<Vec<DataTableHeader<PveReplicationJob>>> }
+/// A replication job together with the runtime state PVE reports for it.
+#[derive(Clone, PartialEq)]
+struct ReplicationEntry { job: PveReplicationJob, status: Option<PveReplicationStatus> }
+
+enum ReplicationMsg { Loaded(Vec<ReplicationEntry>), Reload, Remove(Key), Run(Key), SetDisabled(String, String, bool), ShowTask(RemoteUpid) }
+struct ReplicationJobsComp { state: LoadableComponentState<JobViewState>, store: Store<ReplicationEntry>, selection: Selection, columns: Rc<Vec<DataTableHeader<ReplicationEntry>>> }
 pwt::impl_deref_mut_property!(ReplicationJobsComp, state, LoadableComponentState<JobViewState>);
+
+impl ReplicationJobsComp {
+    fn selected_entry(&self) -> Option<ReplicationEntry> {
+        let key = self.selection.selected_key()?;
+        self.store.read().lookup_record(&key).cloned()
+    }
+}
+
+fn replication_state(entry: &ReplicationEntry) -> String {
+    match &entry.status {
+        None => "-".to_string(),
+        Some(status) => match (&status.error, status.fail_count.unwrap_or(0)) {
+            (Some(error), _) if !error.is_empty() => error.clone(),
+            (_, 0) => tr!("OK"),
+            (_, count) => tr!("{0} failed runs", count),
+        },
+    }
+}
 
 impl LoadableComponent for ReplicationJobsComp {
     type Properties = ReplicationJobs;
@@ -308,13 +375,17 @@ impl LoadableComponent for ReplicationJobsComp {
 
     fn create(ctx: &LoadableComponentContext<Self>) -> Self {
         let selection = Selection::new().on_select({ let link = ctx.link().clone(); move |_| link.send_redraw() });
-        Self { state: LoadableComponentState::new(), store: Store::with_extract_key(|job: &PveReplicationJob| job.id.as_str().into()), selection, columns: Rc::new(vec![
-            DataTableColumn::new("ID").flex(1).get_property(|job: &PveReplicationJob| job.id.as_str()).into(),
-            DataTableColumn::new(tr!("Source")).flex(1).get_property_owned(|job: &PveReplicationJob| job.source.clone().unwrap_or_default()).into(),
-            DataTableColumn::new(tr!("Target")).flex(1).get_property(|job: &PveReplicationJob| job.target.as_str()).into(),
-            DataTableColumn::new(tr!("Schedule")).flex(1).get_property_owned(|job: &PveReplicationJob| job.schedule.clone().unwrap_or_default()).into(),
-            DataTableColumn::new(tr!("Rate")).width("100px").get_property_owned(|job: &PveReplicationJob| job.rate.map(|v| v.to_string()).unwrap_or_default()).into(),
-            DataTableColumn::new(tr!("Comment")).flex(2).get_property_owned(|job: &PveReplicationJob| job.comment.clone().unwrap_or_default()).into(),
+        Self { state: LoadableComponentState::new(), store: Store::with_extract_key(|entry: &ReplicationEntry| entry.job.id.as_str().into()), selection, columns: Rc::new(vec![
+            DataTableColumn::new("ID").flex(1).get_property(|entry: &ReplicationEntry| entry.job.id.as_str()).into(),
+            DataTableColumn::new(tr!("Enabled")).width("90px").justify("center").get_property_owned(|entry: &ReplicationEntry| if entry.job.disable.unwrap_or(false) { tr!("No") } else { tr!("Yes") }).into(),
+            DataTableColumn::new(tr!("Source")).flex(1).get_property_owned(|entry: &ReplicationEntry| entry.job.source.clone().unwrap_or_default()).into(),
+            DataTableColumn::new(tr!("Target")).flex(1).get_property(|entry: &ReplicationEntry| entry.job.target.as_str()).into(),
+            DataTableColumn::new(tr!("Schedule")).flex(1).get_property_owned(|entry: &ReplicationEntry| entry.job.schedule.clone().unwrap_or_default()).into(),
+            DataTableColumn::new(tr!("Last Sync")).width("170px").get_property_owned(|entry: &ReplicationEntry| entry.status.as_ref().and_then(|status| status.last_sync).map(render_epoch).unwrap_or_default()).into(),
+            DataTableColumn::new(tr!("Next Sync")).width("170px").get_property_owned(|entry: &ReplicationEntry| entry.status.as_ref().and_then(|status| status.next_sync).map(render_epoch).unwrap_or_default()).into(),
+            DataTableColumn::new(tr!("Duration")).width("110px").get_property_owned(|entry: &ReplicationEntry| entry.status.as_ref().and_then(|status| status.duration).map(format_duration_human).unwrap_or_default()).into(),
+            DataTableColumn::new(tr!("Status")).flex(2).get_property_owned(replication_state).into(),
+            DataTableColumn::new(tr!("Comment")).flex(2).get_property_owned(|entry: &ReplicationEntry| entry.job.comment.clone().unwrap_or_default()).into(),
         ]) }
     }
 
@@ -323,12 +394,24 @@ impl LoadableComponent for ReplicationJobsComp {
             ReplicationMsg::Loaded(data) => self.store.set_data(data),
             ReplicationMsg::Reload => { ctx.link().change_view(None); ctx.link().send_reload(); }
             ReplicationMsg::ShowTask(upid) => { self.set_task_base_url(format!("/pve/remotes/{}/tasks", upid.remote()).into()); ctx.link().show_task_progress(upid.to_string()); }
+            ReplicationMsg::SetDisabled(id, target, disable) => {
+                let remote = ctx.props().remote.clone();
+                let link = ctx.link().clone();
+                ctx.link().spawn(async move {
+                    let path = format!("/pve/remotes/{remote}/replication/{}", percent_encode_component(&id));
+                    let data = json!({ "id": id, "target": target, "disable": disable });
+                    if let Err(err) = http_put::<()>(path, Some(data)).await {
+                        link.show_error(tr!("Error"), err.to_string(), true);
+                    }
+                    link.send_message(ReplicationMsg::Reload);
+                });
+            }
             ReplicationMsg::Remove(key) => { let remote = ctx.props().remote.clone(); let id = key.to_string(); let link = ctx.link().clone(); ctx.link().spawn(async move { let path = format!("/pve/remotes/{remote}/replication/{}", percent_encode_component(&id)); if let Err(err) = http_delete(path, None).await { link.show_error(tr!("Error"), err.to_string(), true); } link.send_message(ReplicationMsg::Reload); }); }
             ReplicationMsg::Run(key) => {
-                let Some(job) = self.store.read().lookup_record(&key).cloned() else { return false; };
-                let Some(node) = job.source else { ctx.link().show_error(tr!("Cannot run job"), tr!("The source node is unavailable."), true); return false; };
+                let Some(entry) = self.store.read().lookup_record(&key).cloned() else { return false; };
+                let Some(node) = entry.job.source else { ctx.link().show_error(tr!("Cannot run job"), tr!("The source node is unavailable."), true); return false; };
                 let remote = ctx.props().remote.clone(); let link = ctx.link().clone();
-                ctx.link().spawn(async move { match crate::pdm_client().pve_run_replication_job(&remote, &job.id, &node).await { Ok(upid) => link.send_message(ReplicationMsg::ShowTask(upid)), Err(err) => link.show_error(tr!("Error"), err.to_string(), true) } });
+                ctx.link().spawn(async move { match crate::pdm_client().pve_run_replication_job(&remote, &entry.job.id, &node).await { Ok(upid) => link.send_message(ReplicationMsg::ShowTask(upid)), Err(err) => link.show_error(tr!("Error"), err.to_string(), true) } });
             }
         }
         true
@@ -337,17 +420,57 @@ impl LoadableComponent for ReplicationJobsComp {
     fn toolbar(&self, ctx: &LoadableComponentContext<Self>) -> Option<Html> {
         let selected = self.selection.selected_key();
         let run_selected = selected.clone();
+        let selected_entry = self.selected_entry();
+        let disabled_job = selected_entry.as_ref().is_some_and(|entry| entry.job.disable.unwrap_or(false));
         Some(Toolbar::new().border_bottom(true)
             .with_child(Button::new(tr!("Add")).icon_class("fa fa-plus").on_activate(ctx.link().change_view_callback(|_| Some(JobViewState::Create))))
             .with_child(Button::new(tr!("Edit")).icon_class("fa fa-pencil").disabled(selected.is_none()).on_activate(ctx.link().change_view_callback(|_| Some(JobViewState::Edit))))
             .with_child(Button::new(tr!("Run now")).icon_class("fa fa-play").disabled(selected.is_none()).on_activate({ let link = ctx.link().clone(); move |_| if let Some(key) = run_selected.clone() { link.send_message(ReplicationMsg::Run(key)); } }))
+            .with_child(Button::new(if disabled_job { tr!("Enable") } else { tr!("Disable") })
+                .icon_class(if disabled_job { "fa fa-check" } else { "fa fa-ban" })
+                .disabled(selected_entry.is_none())
+                .on_activate({
+                    let link = ctx.link().clone();
+                    let job = selected_entry.as_ref().map(|entry| (entry.job.id.clone(), entry.job.target.clone()));
+                    move |_| if let Some((id, target)) = job.clone() { link.send_message(ReplicationMsg::SetDisabled(id, target, !disabled_job)); }
+                }))
             .with_child(Button::new(tr!("Remove")).icon_class("fa fa-trash").disabled(selected.is_none()).on_activate(ctx.link().change_view_callback(|_| Some(JobViewState::Remove))))
-            .with_flex_spacer().with_child(Button::refresh(self.loading()).on_activate({ let link = ctx.link().clone(); move |_| link.send_reload() })).into())
+            .with_flex_spacer()
+            .with_child(Button::new(tr!("History")).icon_class("fa fa-history").on_activate(ctx.link().change_view_callback(|_| Some(JobViewState::History))))
+            .with_child(Button::refresh(self.loading()).on_activate({ let link = ctx.link().clone(); move |_| link.send_reload() })).into())
     }
 
-    fn load(&self, ctx: &LoadableComponentContext<Self>) -> Pin<Box<dyn Future<Output = Result<(), Error>>>> { let remote = ctx.props().remote.clone(); let link = ctx.link().clone(); Box::pin(async move { link.send_message(ReplicationMsg::Loaded(crate::pdm_client().pve_list_replication_jobs(&remote).await?)); Ok(()) }) }
+    fn load(&self, ctx: &LoadableComponentContext<Self>) -> Pin<Box<dyn Future<Output = Result<(), Error>>>> {
+        let remote = ctx.props().remote.clone();
+        let link = ctx.link().clone();
+        Box::pin(async move {
+            let client = crate::pdm_client();
+            let jobs = client.pve_list_replication_jobs(&remote).await?;
+            // the runtime state is best effort: a node may be unreachable
+            let status = client.pve_list_replication_status(&remote).await.unwrap_or_default();
+            let mut status: HashMap<String, PveReplicationStatus> = status.into_iter().map(|status| (status.id.clone(), status)).collect();
+            let entries = jobs.into_iter().map(|job| {
+                let status = status.remove(&job.id);
+                ReplicationEntry { job, status }
+            }).collect();
+            link.send_message(ReplicationMsg::Loaded(entries));
+            Ok(())
+        })
+    }
     fn main_view(&self, ctx: &LoadableComponentContext<Self>) -> Html { let link = ctx.link().clone(); DataTable::new(self.columns.clone(), self.store.clone()).selection(self.selection.clone()).on_row_dblclick(move |_: &mut _| link.change_view(Some(JobViewState::Edit))).into() }
-    fn dialog_view(&self, ctx: &LoadableComponentContext<Self>, state: &Self::ViewState) -> Option<Html> { let remote = ctx.props().remote.clone(); match state { JobViewState::Create => Some(replication_editor(remote, None, ctx.link().callback(|_| ReplicationMsg::Reload))), JobViewState::Edit => self.selection.selected_key().map(|key| replication_editor(remote, Some(key.to_string()), ctx.link().callback(|_| ReplicationMsg::Reload))), JobViewState::Remove => self.selection.selected_key().map(|key| ConfirmDialog::new(tr!("Confirm"), tr!("Remove replication job '{0}'?", key.to_string())).on_confirm({ let link = ctx.link().clone(); move |_| link.send_message(ReplicationMsg::Remove(key.clone())) }).into()) } }
+    fn dialog_view(&self, ctx: &LoadableComponentContext<Self>, state: &Self::ViewState) -> Option<Html> {
+        let remote = ctx.props().remote.clone();
+        match state {
+            JobViewState::Create => Some(replication_editor(remote, None, ctx.link().callback(|_| ReplicationMsg::Reload))),
+            JobViewState::Edit => self.selection.selected_key().map(|key| replication_editor(remote, Some(key.to_string()), ctx.link().callback(|_| ReplicationMsg::Reload))),
+            JobViewState::Remove => self.selection.selected_key().map(|key| ConfirmDialog::new(tr!("Confirm"), tr!("Remove replication job '{0}'?", key.to_string())).on_confirm({ let link = ctx.link().clone(); move |_| link.send_message(ReplicationMsg::Remove(key.clone())) }).into()),
+            JobViewState::History => Some(
+                JobHistory::new(remote, "pvesr", tr!("Replication Task History"))
+                    .on_close(ctx.link().change_view_callback(|_| None))
+                    .into(),
+            ),
+        }
+    }
 }
 
 fn replication_editor(remote: String, id: Option<String>, done: Callback<()>) -> Html {
