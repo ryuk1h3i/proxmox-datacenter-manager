@@ -264,6 +264,17 @@ pub trait ClientFactory {
 
     /// Create a new API client for raw access to the given remote
     fn make_raw_client(&self, remote: &Remote) -> Result<Box<Client>, Error>;
+
+    /// Create a new API client for raw access to the given remote.
+    ///
+    /// In case the remote has a user configured (instead of an API token), it will connect and get
+    /// a ticket, so that further connections are properly authenticated. Otherwise it behaves
+    /// identically as [`make_raw_client`].
+    ///
+    /// Note: currently does not support two factor authentication.
+    async fn make_raw_client_and_login(&self, remote: &Remote) -> Result<Box<Client>, Error> {
+        Ok(Box::new(connect_or_login(remote, None).await?))
+    }
 }
 
 /// Default production client factory
@@ -439,6 +450,12 @@ pub fn make_pbs_client(remote: &Remote) -> Result<Box<PbsClient>, Error> {
 
 pub fn make_raw_client(remote: &Remote) -> Result<Box<Client>, Error> {
     instance().make_raw_client(remote)
+}
+
+/// Create a new API client for raw access to the given remote, logging in if the remote is
+/// configured with a user instead of an API token.
+pub async fn make_raw_client_and_login(remote: &Remote) -> Result<Box<Client>, Error> {
+    instance().make_raw_client_and_login(remote).await
 }
 
 /// Create a new API client for PVE remotes.

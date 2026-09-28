@@ -109,6 +109,56 @@ pub(crate) fn get_remote<C: yew::Component>(
     None
 }
 
+/// Open an upgrade shell for a node of a remote.
+///
+/// PVE and PBS only run the upgrade command for a real `root@pam` session and fall back to a
+/// login prompt for API tokens. So the console PDM proxies itself - which needs no further
+/// credentials - is only useful for remotes authenticated with a user; token authenticated ones
+/// get the update panel of their own web interface, which offers the upgrade shell after login.
+pub(crate) fn open_upgrade_shell<C: yew::Component>(
+    link: &yew::html::Scope<C>,
+    remote: &str,
+    node: &str,
+) {
+    use proxmox_yew_comp::percent_encoding::percent_encode_component;
+
+    let Some(entry) = get_remote(link, remote) else {
+        return;
+    };
+
+    let (remote_type, hash) = match entry.ty {
+        RemoteType::Pve => ("pve", format!("v1::=node/{node}::apt")),
+        RemoteType::Pbs => ("pbs", "#pbsServerAdministration:updates".to_string()),
+    };
+
+    if entry.authid.is_token() {
+        if let Some(url) = get_deep_url_low_level(link, remote, None, &hash) {
+            let _ = gloo_utils::window().open_with_url(&url.href());
+        }
+        return;
+    }
+
+    let url = format!(
+        "?console=upgrade&xtermjs=1&remote-type={remote_type}&remote={}&node={}",
+        percent_encode_component(remote),
+        percent_encode_component(node),
+    );
+
+    let result = gloo_utils::window().open_with_url_and_target_and_features(
+        &url,
+        "_blank",
+        "toolbar=no,location=no,status=no,menubar=no,resizable=yes,width=800,height=420",
+    );
+
+    match result {
+        Ok(Some(window)) => {
+            let _ = window.focus();
+        }
+        Ok(None) => log::error!("unable to open console window"),
+        Err(err) => log::error!("unable to open console window: {err:?}"),
+    }
+}
+
 /// Get a deep link to the given remote/id pair
 ///
 /// Returns None if the remote can't be found, or there is no global remote list

@@ -36,7 +36,7 @@ use pwt::{
     },
 };
 
-use crate::{get_deep_url_low_level, get_remote, pdm_client};
+use crate::pdm_client;
 
 #[derive(PartialEq, Properties)]
 pub struct UpdateTree {}
@@ -208,34 +208,6 @@ impl UpdateTreeComponent {
     }
 }
 
-/// Open the package update panel of a node in the web interface of its own remote.
-///
-/// The remote only runs the upgrade command for a `root@pam` session, which PDM's shell proxy
-/// cannot provide (it authenticates with an API token). Its console cannot be linked directly
-/// either: without an existing session on that host, pveproxy answers `401 no ticket`. So the
-/// regular update panel is opened, which goes through the normal login flow and offers the
-/// upgrade shell itself.
-fn open_upgrade_shell(
-    link: &LoadableComponentScope<UpdateTreeComponent>,
-    remote: &str,
-    node: &str,
-) {
-    let Some(remote_entry) = get_remote(link, remote) else {
-        return;
-    };
-
-    let hash = match remote_entry.ty {
-        RemoteType::Pve => format!("v1::=node/{node}::apt"),
-        RemoteType::Pbs => "#pbsServerAdministration:updates".to_string(),
-    };
-
-    let Some(url) = get_deep_url_low_level(link, remote, None, &hash) else {
-        return;
-    };
-
-    let _ = gloo_utils::window().open_with_url(&url.href());
-}
-
 fn render_upgrade_action(
     link: &LoadableComponentScope<UpdateTreeComponent>,
     entry: &UpdateTreeEntry,
@@ -264,7 +236,7 @@ fn render_upgrade_action(
         ActionIcon::new("fa fa-fw fa-arrow-circle-o-up")
             .disabled(!has_updates)
             .aria_label(tr!("Upgrade"))
-            .on_activate(move |_| open_upgrade_shell(&link, &remote, &node)),
+            .on_activate(move |_| crate::open_upgrade_shell(&link, &remote, &node)),
     )
     .tip(tip)
     .into()
@@ -571,7 +543,7 @@ impl UpdateTreeComponent {
                             let link = ctx.link().clone();
                             let remote = remote.clone();
                             let node = node.clone();
-                            move |_| open_upgrade_shell(&link, &remote, &node)
+                            move |_| crate::open_upgrade_shell(&link, &remote, &node)
                         });
 
                     let product = match ty {

@@ -17,7 +17,7 @@ pub(crate) mod overview;
 
 use overview::PbsNodeOverviewPanel;
 
-use crate::{get_deep_url_low_level, remotes::RemoteTaskList};
+use crate::remotes::RemoteTaskList;
 use crate::pbs::jobs::PbsJobsPanel;
 
 #[derive(Clone, Debug, Eq, PartialEq, Properties)]
@@ -118,17 +118,9 @@ impl yew::Component for PbsNodePanelComp {
                             .subscription_url(sub_url)
                             .enable_upgrade(true)
                             .on_upgrade({
-                                let remote = remote.clone();
                                 let link = link.clone();
-
-                                move |_| {
-                                    let hash = "#pbsServerAdministration:updates";
-                                    if let Some(url) =
-                                        get_deep_url_low_level(&link, &remote, None, hash)
-                                    {
-                                        let _ = gloo_utils::window().open_with_url(&url.href());
-                                    }
-                                }
+                                let remote = remote.clone();
+                                move |_| crate::open_upgrade_shell(&link, &remote, "localhost")
                             })
                             .into()
                     }

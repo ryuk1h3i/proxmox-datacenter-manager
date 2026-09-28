@@ -1,6 +1,5 @@
 use std::rc::Rc;
 
-use gloo_utils::window;
 use proxmox_deb_version::Version;
 use proxmox_yew_comp::{AptPackageManager, ConsoleType, NotesView, XTermJs};
 use yew::virtual_dom::{VComp, VNode};
@@ -16,8 +15,6 @@ use pwt_macros::builder;
 mod overview;
 
 use overview::PveNodeOverviewPanel;
-
-use crate::get_deep_url;
 
 #[derive(Clone, Debug, Eq, PartialEq, Properties)]
 #[builder]
@@ -120,14 +117,10 @@ impl yew::Component for PveNodePanelComp {
                             .subscription_url(sub_url)
                             .enable_upgrade(true)
                             .on_upgrade({
-                                let remote = remote.clone();
                                 let link = link.clone();
-                                let id = format!("node/{}::apt", node);
-                                move |_| {
-                                    if let Some(url) = get_deep_url(&link, &remote, None, &id) {
-                                        let _ = window().open_with_url(&url.href());
-                                    }
-                                }
+                                let remote = remote.clone();
+                                let node = node.clone();
+                                move |_| crate::open_upgrade_shell(&link, &remote, &node)
                             })
                             .into()
                     }

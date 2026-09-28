@@ -4,10 +4,7 @@ use anyhow::{Context, Error, bail};
 use serde::{Deserialize, Serialize};
 use serde_json::{Value, json};
 
-use proxmox_auth_api::{
-    Keyring,
-    ticket::{Empty, Ticket},
-};
+use proxmox_auth_api::{Keyring, ticket::Ticket};
 use proxmox_client::ApiPathBuilder;
 use proxmox_router::{ApiHandler, ApiMethod, ApiResponseFuture, Permission, RpcEnvironment};
 use proxmox_schema::{IntegerSchema, ObjectSchema, StringSchema, api};
@@ -51,6 +48,33 @@ impl std::str::FromStr for TermTicketType {
     }
 }
 
+/// The command a node shell should run, carried inside the (signed) term ticket.
+#[derive(Clone, Default, Eq, PartialEq, Deserialize, Serialize)]
+pub(crate) struct ShellCommand {
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    cmd: Option<String>,
+}
+
+impl fmt::Display for ShellCommand {
+    fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
+        match serde_json::to_string(self) {
+            Ok(s) => f.write_str(&s),
+            Err(err) => {
+                log::error!("error building json string: {err:?}");
+                Err(fmt::Error)
+            }
+        }
+    }
+}
+
+impl std::str::FromStr for ShellCommand {
+    type Err = Error;
+
+    fn from_str(s: &str) -> Result<Self, Error> {
+        serde_json::from_str(s).context("failed to parse shell ticket information")
+    }
+}
+
 #[api(
     protected: true,
     input: {
@@ -58,6 +82,12 @@ impl std::str::FromStr for TermTicketType {
             remote: { schema: REMOTE_ID_SCHEMA },
             node: {
                 schema: NODE_SCHEMA,
+            },
+            cmd: {
+                description: "Command to run instead of a login shell. Only honored by remotes \
+                    which are configured with a `root@pam` user, not with an API token.",
+                type: String,
+                optional: true,
             },
         },
     },
@@ -88,12 +118,13 @@ impl std::str::FromStr for TermTicketType {
 pub(crate) async fn shell_ticket(
     remote: String,
     node: String,
+    cmd: Option<String>,
     rpcenv: &mut dyn RpcEnvironment,
 ) -> Result<Value, Error> {
     create_term_ticket(
         rpcenv,
         move || encode_term_ticket_path(&remote, &node),
-        || Empty,
+        move || ShellCommand { cmd },
     )
 }
 
@@ -259,7 +290,7 @@ macro_rules! upgrade_to_websocket_impl {
                 let (ticket, port, further_args, use_preamble) =
                     $get_ticket_and_port(&remote, &shell_params, ticket_data).await?;
 
-                let raw_client = crate::connection::make_raw_client(remote)?;
+                let raw_client = crate::connection::make_raw_client_and_login(remote).await?;
 
                 let ws_key = proxmox_sys::linux::random_data(16)?;
                 let ws_key = proxmox_base64::encode(&ws_key);
@@ -298,11 +329,8 @@ macro_rules! upgrade_to_websocket_impl {
                     .await
                     .map_err(|err| ::anyhow::format_err!("failed to upgrade - {}", err))?;
 
-                let username = if let proxmox_client::AuthenticationKind::Token(ref token) = *auth {
-                    token.userid.clone()
-                } else {
-                    bail!("shell not supported with ticket-based authentication")
-                };
+                // must be the identity which obtained the terminal ticket above
+                let username = auth.userid().to_string();
 
                 let preamble = if use_preamble {
                     format!("{username}:{ticket}\n", ticket = ticket)
@@ -339,16 +367,21 @@ upgrade_to_websocket_impl! {
             .map(str::to_owned)
     },
     encode_term_ticket_path,
-    Empty,
-    async |remote: &Remote, node: &String, _: Empty| -> Result<(String, i64, (), bool), Error> {
+    ShellCommand,
+    async |remote: &Remote, node: &String, shell_cmd: ShellCommand| -> Result<(String, i64, (), bool), Error> {
         Ok(match remote.ty {
             RemoteType::Pve => {
-                let pve = crate::connection::make_pve_client(remote)?;
+                // PVE only runs `cmd` for a real `root@pam` session, never for an API token
+                let pve = crate::connection::make_pve_client_and_login(remote).await?;
                 let pve_term_ticket = pve
                     .node_shell_termproxy(
                         node,
                         pve_api_types::NodeShellTermproxy {
-                            cmd: None,
+                            cmd: shell_cmd
+                                .cmd
+                                .as_deref()
+                                .map(|cmd| cmd.parse::<pve_api_types::NodeShellTermproxyCmd>())
+                                .transpose()?,
                             cmd_opts: None,
                         },
                     )
@@ -356,8 +389,8 @@ upgrade_to_websocket_impl! {
                 (pve_term_ticket.ticket, pve_term_ticket.port, (), true)
             }
             RemoteType::Pbs => {
-                let pbs = crate::connection::make_pbs_client(remote)?;
-                let pbs_term_ticket = pbs.node_shell_termproxy().await?;
+                let pbs = crate::connection::make_pbs_client_and_login(remote).await?;
+                let pbs_term_ticket = pbs.node_shell_termproxy(shell_cmd.cmd.as_deref()).await?;
                 (pbs_term_ticket.ticket, pbs_term_ticket.port as i64, (), true)
             }
         })

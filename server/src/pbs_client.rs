@@ -294,9 +294,16 @@ impl<C: HttpApiClient<Body = proxmox_http::Body>> PbsClient<C> {
     }
 
     /// Return a term ticket for calling the vncwebsocket endpoint
-    pub async fn node_shell_termproxy(&self) -> Result<pbs_api_types::NodeShellTicket, Error> {
+    pub async fn node_shell_termproxy(
+        &self,
+        cmd: Option<&str>,
+    ) -> Result<pbs_api_types::NodeShellTicket, Error> {
         let path = "/api2/extjs/nodes/localhost/termproxy";
-        Ok(self.0.post_without_body(path).await?.expect_json()?.data)
+        let response = match cmd {
+            Some(cmd) => self.0.post(path, &serde_json::json!({ "cmd": cmd })).await?,
+            None => self.0.post_without_body(path).await?,
+        };
+        Ok(response.expect_json()?.data)
     }
 
     /// Return the node config of the Proxmox Backup Server instance
