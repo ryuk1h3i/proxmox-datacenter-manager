@@ -1010,9 +1010,18 @@ async fn create_qemu(
     let disk_storage = form_ctx.read().get_field_text("disk-storage");
     let disk_size = form_ctx.read().get_field_text("disk-size");
     if !disk_storage.is_empty() && !disk_size.is_empty() {
-        data["scsi0"] = serde_json::Value::String(format!(
-            "{disk_storage}:{disk_size},discard=on,iothread=1"
-        ));
+        let mut disk = format!("{disk_storage}:{disk_size}");
+        if form_ctx.read().get_field_checked("disk-discard") {
+            disk.push_str(",discard=on");
+        }
+        if form_ctx.read().get_field_checked("disk-iothread") {
+            disk.push_str(",iothread=1");
+            // iothread has no effect without a single-queue-per-disk controller
+            if data["scsihw"].as_str().unwrap_or_default().is_empty() {
+                data["scsihw"] = serde_json::Value::String("virtio-scsi-single".into());
+            }
+        }
+        data["scsi0"] = serde_json::Value::String(disk);
     }
     let bridge = form_ctx.read().get_field_text("network-bridge");
     if !bridge.is_empty() {
@@ -1296,6 +1305,14 @@ fn create_qemu_input_panel(form_ctx: &FormContext) -> Html {
         .with_right_field(
             tr!("Disk size (GiB)"),
             Number::new().name("disk-size").min(1u64).default(32u64),
+        )
+        .with_field(
+            tr!("Discard (TRIM)"),
+            Checkbox::new().name("disk-discard").default(false),
+        )
+        .with_right_field(
+            tr!("IO thread"),
+            Checkbox::new().name("disk-iothread").default(false),
         )
         .with_large_field(
             tr!("Network bridge"),
