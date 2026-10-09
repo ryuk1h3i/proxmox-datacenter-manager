@@ -1,3 +1,6 @@
+use std::sync::Arc;
+use std::time::Duration;
+
 use anyhow::{Context, Error, bail};
 use serde_json::Value;
 
@@ -9,7 +12,7 @@ use proxmox_router::{
 };
 use proxmox_schema::{IntegerSchema, ObjectSchema, StringSchema, api};
 use proxmox_sortable_macro::sortable;
-use pve_api_types::PendingConfigValue;
+use pve_api_types::{IsRunning, PendingConfigValue};
 
 use pdm_api_types::remotes::REMOTE_ID_SCHEMA;
 use pdm_api_types::remotes::Remote;
@@ -22,6 +25,7 @@ use pdm_api_types::{
 use crate::api::nodes::vncwebsocket::required_integer_param;
 use crate::api::pve::get_remote;
 use crate::api::remotes::shell::TermTicketType;
+use crate::connection::PveClient;
 
 use super::{
     check_guest_delete_perms, check_guest_list_permissions, check_guest_permissions,
@@ -1167,6 +1171,16 @@ pub async fn lxc_remote_migrate(
     let target_node = super::select_migration_target_node(target, target_endpoint.as_deref())?;
     let target_endpoint = super::build_migration_endpoint(target, target_node)?;
 
+    // PVE starts the CT on the target before deleting the source: if that start fails, the source
+    // stays locked ('migrate') and an API token cannot unlock it. So restart around PVE instead.
+    let restart_here = delete
+        && restart.unwrap_or(false)
+        && source_conn.lxc_get_status(&node, vmid).await?.status == IsRunning::Running;
+    if restart_here {
+        log::info!("shutting down CT {vmid} on node {node:?} before the remote migration");
+        shutdown_lxc_and_wait(source_conn.as_ref(), &node, vmid, timeout).await?;
+    }
+
     log::info!("forwarding remote migration requested");
     let params = pve_api_types::RemoteMigrateLxc {
         target_bridge,
@@ -1176,13 +1190,120 @@ pub async fn lxc_remote_migrate(
         target_vmid,
         target_endpoint,
         bwlimit: bwlimit.map(|limit| limit as f64),
-        restart,
-        timeout,
+        restart: if restart_here { None } else { restart },
+        timeout: if restart_here { None } else { timeout },
     };
     log::info!("migrating vm {vmid} of node {node:?}");
-    let upid = source_conn.remote_migrate_lxc(&node, vmid, params).await?;
+    let upid = match source_conn.remote_migrate_lxc(&node, vmid, params).await {
+        Ok(upid) => upid,
+        Err(err) => {
+            if restart_here {
+                start_lxc_logged(source_conn.as_ref(), &node, vmid).await;
+            }
+            return Err(err.into());
+        }
+    };
+
+    if restart_here {
+        let target_conn = super::connect(target)?;
+        let target_remote = target.id.clone();
+        let target_vmid = target_vmid.unwrap_or(vmid);
+        let source_conn = Arc::clone(&source_conn);
+        let upid = upid.to_string();
+        tokio::spawn(async move {
+            start_after_remote_migration(
+                source_conn,
+                node,
+                vmid,
+                upid,
+                target_conn,
+                target_remote,
+                target_vmid,
+            )
+            .await
+        });
+    }
 
     new_remote_upid(source, upid).await
+}
+
+const TASK_POLL_INTERVAL: Duration = Duration::from_secs(5);
+
+/// Poll a PVE task until it finishes and return whether it succeeded.
+async fn wait_for_pve_task(pve: &PveClient, node: &str, upid: &str) -> Result<bool, Error> {
+    let mut failed_polls = 0;
+    loop {
+        tokio::time::sleep(TASK_POLL_INTERVAL).await;
+        match pve.get_task_status(node, upid).await {
+            Ok(status) if !status.is_running() => {
+                return Ok(status.finished_successfully() == Some(true));
+            }
+            Ok(_) => failed_polls = 0,
+            // migrations can run for hours, don't give up on a short connection hiccup
+            Err(err) if failed_polls < 12 => {
+                failed_polls += 1;
+                log::warn!("could not query status of task {upid} - {err}");
+            }
+            Err(err) => return Err(err.into()),
+        }
+    }
+}
+
+/// Shut down a container like PVE's restart migration does: graceful first, forced after timeout.
+async fn shutdown_lxc_and_wait(
+    pve: &PveClient,
+    node: &str,
+    vmid: u32,
+    timeout: Option<i64>,
+) -> Result<(), Error> {
+    let params = pve_api_types::ShutdownLxc {
+        force_stop: Some(true),
+        timeout: Some(timeout.unwrap_or(180).max(0) as u64),
+    };
+    let upid = pve.shutdown_lxc_async(node, vmid, params).await?;
+    if !wait_for_pve_task(pve, node, &upid.to_string()).await? {
+        bail!("could not shut down CT {vmid} for the migration");
+    }
+    Ok(())
+}
+
+async fn start_lxc_logged(pve: &PveClient, node: &str, vmid: u32) {
+    if let Err(err) = pve.start_lxc_async(node, vmid, Default::default()).await {
+        log::error!("could not start CT {vmid} on node {node:?} - {err}");
+    }
+}
+
+/// Finish a restart migration handled by PDM: start the migrated CT on the target, or the
+/// source CT again if the migration failed.
+async fn start_after_remote_migration(
+    source: Arc<PveClient>,
+    source_node: String,
+    vmid: u32,
+    upid: String,
+    target: Arc<PveClient>,
+    target_remote: String,
+    target_vmid: u32,
+) {
+    match wait_for_pve_task(source.as_ref(), &source_node, &upid).await {
+        Ok(true) => {
+            let started = async {
+                let node = find_node_for_vm(None, target_vmid, target.as_ref()).await?;
+                let upid = target
+                    .start_lxc_async(&node, target_vmid, Default::default())
+                    .await?;
+                new_remote_upid(target_remote.clone(), upid).await
+            };
+            if let Err(err) = started.await {
+                log::error!(
+                    "remote migration of CT {vmid}: could not start CT {target_vmid} on remote \
+                    {target_remote:?} - {err}"
+                );
+            }
+        }
+        // the source is only unlocked when its config was not migrated, otherwise this fails
+        Ok(false) => start_lxc_logged(source.as_ref(), &source_node, vmid).await,
+        Err(err) => log::error!("remote migration of CT {vmid}: lost track of task {upid} - {err}"),
+    }
 }
 
 fn encode_term_ticket_path(remote: &str, vmid: u32) -> String {

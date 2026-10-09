@@ -381,6 +381,26 @@ impl PdmMigrateWindow {
                 }
             }
         }
+        // PVE keeps a non-deleted source locked on purpose, and only `pct/qm unlock` can clear it
+        if !same_remote
+            && form_ctx.read().get_field_value("delete-source") == Some(Value::Bool(false))
+        {
+            let unlock_cmd = match guest_info.guest_type {
+                GuestType::Qemu => "qm",
+                GuestType::Lxc => "pct",
+            };
+            warnings.push(
+                Row::new()
+                    .gap(2)
+                    .with_child(Fa::from(Status::Warning))
+                    .with_child(tr!(
+                        "The source guest will stay stopped and locked ('migrate'). To use it again, run '{0} unlock {1}' on its node.",
+                        unlock_cmd,
+                        guest_info.vmid
+                    ))
+                    .into(),
+            );
+        }
 
         let show_target_storage =
             (same_remote && uses_local_disks && running) || (!same_remote && !detail_mode);
