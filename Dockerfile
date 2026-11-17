@@ -44,9 +44,9 @@ COPY debian/control debian/control
 COPY ui/debian/control ui/debian/control
 RUN apt-get update \
     && mk-build-deps --install --remove \
-        --tool 'apt-get -y --no-install-recommends' debian/control \
+        --tool 'apt-get -y --no-install-recommends --no-remove -o Debug::pkgProblemResolver=yes' debian/control \
     && mk-build-deps --install --remove \
-        --tool 'apt-get -y --no-install-recommends' ui/debian/control
+        --tool 'apt-get -y --no-install-recommends --no-remove -o Debug::pkgProblemResolver=yes' ui/debian/control
 
 FROM deps AS build-api
 COPY . .

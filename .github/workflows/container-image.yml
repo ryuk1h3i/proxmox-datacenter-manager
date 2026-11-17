@@ -1,17 +1,12 @@
 name: Build and publish container image
 
 on:
-  push:
-    branches:
-      - "**"
-    tags:
-      - "v*"
-  pull_request:
-  # Republishes the image with the current Debian security updates. This is the
-  # only way a deployed container gets base system fixes.
-  schedule:
-    - cron: "17 4 * * 1"
   workflow_dispatch:
+    inputs:
+      clean_build:
+        description: Rebuild all layers with current package indexes
+        type: boolean
+        default: true
 
 permissions:
   contents: read
@@ -53,6 +48,8 @@ jobs:
           target: ${{ matrix.component }}-packages
           outputs: type=local,dest=packages
           provenance: false
+          pull: true
+          no-cache: ${{ inputs.clean_build }}
           cache-from: type=gha,scope=${{ matrix.component }}
           cache-to: type=gha,mode=max,scope=${{ matrix.component }}
 
@@ -101,8 +98,7 @@ jobs:
         with:
           images: ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}
           tags: |
-            type=schedule,pattern=rebuild-{{date 'YYYYMMDD'}}
-            type=sha,prefix=sha-,enable=${{ github.event_name != 'schedule' }}
+            type=sha,prefix=sha-
             type=ref,event=branch
             type=ref,event=tag
             type=semver,pattern={{version}}
@@ -122,8 +118,7 @@ jobs:
             PDM_IMAGE_REPOSITORY=${{ env.IMAGE_NAME }}
             PDM_IMAGE_REVISION=${{ github.sha }}
             PDM_IMAGE_CREATED=${{ steps.build-info.outputs.created }}
-          # A scheduled run exists to pick up new base packages, so it must not
-          # reuse the layer that installed the old ones.
-          no-cache: ${{ github.event_name == 'schedule' }}
+          pull: true
+          no-cache: ${{ inputs.clean_build }}
           cache-from: type=gha,scope=runtime
           cache-to: type=gha,mode=max,scope=runtime

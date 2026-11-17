@@ -28,24 +28,24 @@ web-sys = { version = "0.3", features = ["Location", "DataTransfer"] }
 yew = { version = "0.21",  features = ["csr"] }
 yew-router = { version = "0.18" }
 
-pwt = "0.8.0"
-pwt-macros = "0.5"
+pwt = "0.8.22"
+pwt-macros = "0.5.3"
 
-proxmox-yew-comp = { version = "0.8.17", features = ["apt", "dns", "network", "rrd"] }
+proxmox-yew-comp = { version = "0.8.26", features = ["apt", "dns", "network", "rrd"] }
 
-proxmox-access-control = { version = "1.1", features = []}
-proxmox-acme-api = "1"
+proxmox-access-control = { version = "1.3.3", features = []}
+proxmox-acme-api = "1.0.2"
 proxmox-deb-version = "0.1"
-proxmox-client = "1"
-proxmox-human-byte = "1"
-proxmox-installer-types = "0.2"
-proxmox-login = "1"
-proxmox-network-types = "1.1"
-proxmox-schema = "5"
-proxmox-subscription = { version = "1.0.1", features = ["api-types"], default-features = false }
-proxmox-rrd-api-types = "1"
-proxmox-time = "2"
-pbs-api-types = { version = "1.0.3", features = [ "enum-fallback" ] }
+proxmox-client = "1.0.4"
+proxmox-human-byte = "1.0.1"
+proxmox-installer-types = "0.3.1"
+proxmox-login = "1.0.3"
+proxmox-network-types = "1.2.1"
+proxmox-schema = "5.7.0"
+proxmox-subscription = { version = "1.0.2", features = ["api-types"], default-features = false }
+proxmox-rrd-api-types = "1.1.1"
+proxmox-time = "2.1.2"
+pbs-api-types = { version = "1.0.23", features = [ "enum-fallback" ] }
 
 pdm-api-types = { version = "1.0", path = "../lib/pdm-api-types" }
 pdm-client = { version = "1.0", path = "../lib/pdm-client" }
