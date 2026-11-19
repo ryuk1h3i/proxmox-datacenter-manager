@@ -42,7 +42,7 @@ use pwt::widget::{
 };
 
 use pdm_client::types::StorageContent;
-use pdm_api_types::acl::PRIV_RESOURCE_MANAGE;
+use pdm_api_types::PRIV_RESOURCE_MANAGE;
 use pdm_api_types::guest::{CreateLxc, CreateQemu};
 use pdm_api_types::media::MediaContentType;
 use pdm_api_types::remotes::RemoteType;
@@ -1891,7 +1891,7 @@ fn guest_actions(link: &LoadableComponentScope<GuestPanelComp>, entry: &GuestEnt
 }
 
 async fn load_guest_tags(
-    url: String,
+    url: AttrValue,
 ) -> Result<proxmox_client::ApiResponseData<serde_json::Value>, Error> {
     let mut response = proxmox_yew_comp::http_get_full::<serde_json::Value>(
         &url,
