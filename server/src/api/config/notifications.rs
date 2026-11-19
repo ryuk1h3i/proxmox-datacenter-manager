@@ -10,24 +10,22 @@ use proxmox_router::{Router, list_subdirs_api_method};
 use proxmox_schema::api;
 use proxmox_sortable_macro::sortable;
 
+use proxmox_notify::api::get_targets;
 use proxmox_notify::api::{gotify as gotify_api, matcher as matcher_api, sendmail as sendmail_api};
-use proxmox_notify::api::{Target, get_targets};
-use proxmox_notify::api::{common as common_api, smtp as smtp_api, webhook as webhook_api};
-use proxmox_notify::endpoints::gotify::{
-    DeleteableGotifyProperty, GotifyConfig, GotifyConfigUpdater, GotifyPrivateConfig,
+use proxmox_notify::api::{smtp as smtp_api, webhook as webhook_api};
+use proxmox_notify::api_types::{
+    DeletableGotifyProperty, GotifyConfig, GotifyConfigUpdater, GotifyPrivateConfig,
     GotifyPrivateConfigUpdater,
 };
-use proxmox_notify::endpoints::sendmail::{
-    DeleteableSendmailProperty, SendmailConfig, SendmailConfigUpdater,
+use proxmox_notify::api_types::{
+    DeletableMatcherProperty, MatcherConfig, MatcherConfigUpdater, Target,
 };
-use proxmox_notify::endpoints::smtp::{
-    DeleteableSmtpProperty, SmtpConfig, SmtpConfigUpdater, SmtpPrivateConfig,
+use proxmox_notify::api_types::{DeletableSendmailProperty, SendmailConfig, SendmailConfigUpdater};
+use proxmox_notify::api_types::{
+    DeletableSmtpProperty, SmtpConfig, SmtpConfigUpdater, SmtpPrivateConfig,
     SmtpPrivateConfigUpdater,
 };
-use proxmox_notify::endpoints::webhook::{
-    DeleteableWebhookProperty, WebhookConfig, WebhookConfigUpdater,
-};
-use proxmox_notify::matcher::{DeleteableMatcherProperty, MatcherConfig, MatcherConfigUpdater};
+use proxmox_notify::api_types::{DeletableWebhookProperty, WebhookConfig, WebhookConfigUpdater};
 
 use pdm_api_types::{ConfigDigest, PRIV_SYS_MODIFY};
 
@@ -138,7 +136,7 @@ pub fn list_targets() -> Result<Vec<Target>, Error> {
 /// Send a test notification to a specific notification target.
 pub fn test_target(name: String) -> Result<(), Error> {
     let (config, _digest) = pdm_config::notifications::config()?;
-    Ok(common_api::test_target(&config, &name)?)
+    crate::notifications::test_target(&config, &name)
 }
 
 // --- sendmail -------------------------------------------------------------
@@ -192,7 +190,7 @@ pub fn add_sendmail_endpoint(config: SendmailConfig) -> Result<(), Error> {
                 description: "List of properties to delete.",
                 type: Array,
                 optional: true,
-                items: { type: DeleteableSendmailProperty },
+                items: { type: DeletableSendmailProperty },
             },
             digest: { type: ConfigDigest, optional: true },
         },
@@ -204,7 +202,7 @@ pub fn add_sendmail_endpoint(config: SendmailConfig) -> Result<(), Error> {
 pub fn update_sendmail_endpoint(
     name: String,
     update: SendmailConfigUpdater,
-    delete: Option<Vec<DeleteableSendmailProperty>>,
+    delete: Option<Vec<DeletableSendmailProperty>>,
     digest: Option<ConfigDigest>,
 ) -> Result<(), Error> {
     let _lock = pdm_config::notifications::lock_config()?;
@@ -309,7 +307,7 @@ pub fn add_smtp_endpoint(config: SmtpConfig, password: Option<String>) -> Result
                 description: "List of properties to delete.",
                 type: Array,
                 optional: true,
-                items: { type: DeleteableSmtpProperty },
+                items: { type: DeletableSmtpProperty },
             },
             digest: { type: ConfigDigest, optional: true },
         },
@@ -323,7 +321,7 @@ pub fn update_smtp_endpoint(
     name: String,
     update: SmtpConfigUpdater,
     password: Option<String>,
-    delete: Option<Vec<DeleteableSmtpProperty>>,
+    delete: Option<Vec<DeletableSmtpProperty>>,
     digest: Option<ConfigDigest>,
 ) -> Result<(), Error> {
     let _lock = pdm_config::notifications::lock_config()?;
@@ -436,7 +434,7 @@ pub fn add_gotify_endpoint(config: GotifyConfig, token: String) -> Result<(), Er
                 description: "List of properties to delete.",
                 type: Array,
                 optional: true,
-                items: { type: DeleteableGotifyProperty },
+                items: { type: DeletableGotifyProperty },
             },
             digest: { type: ConfigDigest, optional: true },
         },
@@ -450,7 +448,7 @@ pub fn update_gotify_endpoint(
     name: String,
     update: GotifyConfigUpdater,
     token: Option<String>,
-    delete: Option<Vec<DeleteableGotifyProperty>>,
+    delete: Option<Vec<DeletableGotifyProperty>>,
     digest: Option<ConfigDigest>,
 ) -> Result<(), Error> {
     let _lock = pdm_config::notifications::lock_config()?;
@@ -556,7 +554,7 @@ pub fn add_webhook_endpoint(config: WebhookConfig) -> Result<(), Error> {
                 description: "List of properties to delete.",
                 type: Array,
                 optional: true,
-                items: { type: DeleteableWebhookProperty },
+                items: { type: DeletableWebhookProperty },
             },
             digest: { type: ConfigDigest, optional: true },
         },
@@ -568,7 +566,7 @@ pub fn add_webhook_endpoint(config: WebhookConfig) -> Result<(), Error> {
 pub fn update_webhook_endpoint(
     name: String,
     update: WebhookConfigUpdater,
-    delete: Option<Vec<DeleteableWebhookProperty>>,
+    delete: Option<Vec<DeletableWebhookProperty>>,
     digest: Option<ConfigDigest>,
 ) -> Result<(), Error> {
     let _lock = pdm_config::notifications::lock_config()?;
@@ -654,7 +652,7 @@ pub fn add_matcher(config: MatcherConfig) -> Result<(), Error> {
                 description: "List of properties to delete.",
                 type: Array,
                 optional: true,
-                items: { type: DeleteableMatcherProperty },
+                items: { type: DeletableMatcherProperty },
             },
             digest: { type: ConfigDigest, optional: true },
         },
@@ -666,7 +664,7 @@ pub fn add_matcher(config: MatcherConfig) -> Result<(), Error> {
 pub fn update_matcher(
     name: String,
     update: MatcherConfigUpdater,
-    delete: Option<Vec<DeleteableMatcherProperty>>,
+    delete: Option<Vec<DeletableMatcherProperty>>,
     digest: Option<ConfigDigest>,
 ) -> Result<(), Error> {
     let _lock = pdm_config::notifications::lock_config()?;

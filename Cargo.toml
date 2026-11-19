@@ -45,7 +45,7 @@ proxmox-ldap = { version = "1.1.2", features = ["sync"] }
 proxmox-lang = "1.5.0"
 proxmox-log = "1"
 proxmox-login = "1.0.3"
-proxmox-notify = { version = "2.0.1", features = ["legacy-matchers"] }
+proxmox-notify = { version = "3.0.0", features = ["api-impl", "send-impl", "legacy-matchers"] }
 proxmox-rest-server = "1.3.1"
 # some use "cli", some use "cli" and "server", pbs-config uses nothing
 proxmox-router = { version = "3.4.0", default-features = false }

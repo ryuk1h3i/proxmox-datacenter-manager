@@ -21,6 +21,10 @@ options such as passwords or authentication tokens are kept in
 .. NOTE:: No targets or matchers are configured by default, which means no notifications are sent
    until you create at least one of each.
 
+Existing target definitions, private credentials and legacy matcher rules remain supported
+when upgrading to ``proxmox-notify`` 3. Testing a target sends directly to that target,
+independently of matcher rules. Disabled targets and delivery failures are reported as errors.
+
 .. _notification_targets:
 
 Notification Targets

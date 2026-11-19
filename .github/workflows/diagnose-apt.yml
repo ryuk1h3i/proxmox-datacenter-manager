@@ -2,14 +2,20 @@ name: Diagnose build dependencies
 
 on:
   workflow_dispatch:
+    inputs:
+      build_image:
+        description: Start the container build after successful regression tests
+        type: boolean
+        default: false
 
 permissions:
   contents: read
+  actions: write
 
 jobs:
   diagnose:
     runs-on: ubuntu-latest
-    timeout-minutes: 15
+    timeout-minutes: 60
     steps:
       - name: Check out repository
         uses: actions/checkout@v4
@@ -24,19 +30,44 @@ jobs:
             apt-get update
             apt-cache policy \
               librust-proxmox-notify-dev \
-              librust-proxmox-notify+default-dev \
-              librust-proxmox-notify-2+default-dev \
-              librust-proxmox-notify-2+legacy-matchers-dev
+              librust-proxmox-notify+api-impl-dev \
+              librust-proxmox-notify+send-impl-dev
             apt-get --simulate --no-install-recommends \
               -o Debug::pkgProblemResolver=yes install \
-              librust-proxmox-notify-2+default-dev \
-              librust-proxmox-notify-2+legacy-matchers-dev
+              librust-proxmox-notify-3+api-impl-dev \
+              librust-proxmox-notify-3+send-impl-dev \
+              librust-proxmox-notify-3+legacy-matchers-dev
           ' 2>&1 | tee apt-diagnostic.log
+
+      - name: Build dependency environment
+        run: docker build --target deps --tag pdm-notify-tests .
+
+      - name: Run notification regression tests
+        run: |
+          docker run --rm --volume "$GITHUB_WORKSPACE:/source" pdm-notify-tests sh -ec '
+            cargo test -p pdm-config notification_config
+            cargo test -p server --lib notifications::tests
+          ' 2>&1 | tee notification-tests.log
 
       - name: Upload diagnostic log
         if: always()
         uses: actions/upload-artifact@v4
         with:
           name: apt-diagnostic
-          path: apt-diagnostic.log
+          path: |
+            apt-diagnostic.log
+            notification-tests.log
           if-no-files-found: ignore
+
+      - name: Start container build after successful tests
+        if: success() && inputs.build_image
+        uses: actions/github-script@v7
+        with:
+          script: |
+            await github.rest.actions.createWorkflowDispatch({
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              workflow_id: 'container-image.yml',
+              ref: context.ref,
+              inputs: { clean_build: 'true' },
+            });
