@@ -1,0 +1,42 @@
+name: Diagnose build dependencies
+
+on:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  diagnose:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v4
+
+      - name: Build the existing base environment
+        run: docker build --pull --no-cache --target base --tag pdm-apt-diagnostic .
+
+      - name: Simulate notification dependencies
+        shell: bash
+        run: |
+          docker run --rm pdm-apt-diagnostic sh -ec '
+            apt-get update
+            apt-cache policy \
+              librust-proxmox-notify-dev \
+              librust-proxmox-notify+default-dev \
+              librust-proxmox-notify-2+default-dev \
+              librust-proxmox-notify-2+legacy-matchers-dev
+            apt-get --simulate --no-install-recommends \
+              -o Debug::pkgProblemResolver=yes install \
+              librust-proxmox-notify-2+default-dev \
+              librust-proxmox-notify-2+legacy-matchers-dev
+          ' 2>&1 | tee apt-diagnostic.log
+
+      - name: Upload diagnostic log
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: apt-diagnostic
+          path: apt-diagnostic.log
+          if-no-files-found: ignore
