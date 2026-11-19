@@ -20,7 +20,7 @@ use yew::virtual_dom::{Key, VComp, VNode};
 use proxmox_human_byte::HumanByte;
 use proxmox_yew_comp::utils::format_duration_human;
 use proxmox_yew_comp::{
-    EditWindow, LoadableComponent, LoadableComponentContext, LoadableComponentMaster,
+    AclContext, EditWindow, LoadableComponent, LoadableComponentContext, LoadableComponentMaster,
     LoadableComponentScope, LoadableComponentScopeExt, LoadableComponentState, rrd_value_renderer,
 };
 
@@ -42,6 +42,7 @@ use pwt::widget::{
 };
 
 use pdm_client::types::StorageContent;
+use pdm_api_types::acl::PRIV_RESOURCE_MANAGE;
 use pdm_api_types::guest::{CreateLxc, CreateQemu};
 use pdm_api_types::media::MediaContentType;
 use pdm_api_types::remotes::RemoteType;
@@ -239,6 +240,7 @@ pub enum ViewState {
     Migrate(String, String, GuestInfo),
     Snapshots(String, GuestInfo, String),
     Console(String, String, GuestInfo),
+    EditTags(Key),
     /// Show the full detail panel of the guest with the given key.
     Detail(Key),
 }
@@ -256,6 +258,8 @@ pub enum Msg {
     ShowTask(RemoteUpid),
     /// A guest creation task was registered or changed state.
     PendingChanged,
+    TagsUpdated(Key, Vec<String>),
+    UpdateAcl(AclContext),
 }
 
 #[doc(hidden)]
@@ -287,6 +291,9 @@ pub struct GuestPanelComp {
     pending: Option<PendingGuests>,
     _pending_handle: Option<ContextHandle<PendingGuests>>,
     _pending_observer: Option<SharedStateObserver<Vec<PendingGuest>>>,
+    acl_context: AclContext,
+    _acl_handle: ContextHandle<AclContext>,
+    refresh_after_tag_edit: bool,
 }
 
 pwt::impl_deref_mut_property!(GuestPanelComp, state, LoadableComponentState<ViewState>);
@@ -437,6 +444,10 @@ impl LoadableComponent for GuestPanelComp {
 
         // root stays hidden so the remote groups are the top-level rows
         let tree_store = TreeStore::new().view_root(false);
+        let (acl_context, acl_handle) = ctx
+            .link()
+            .context(ctx.link().callback(Msg::UpdateAcl))
+            .expect("acl context not present");
 
         let (pending, _pending_handle) = ctx
             .link()
@@ -453,9 +464,9 @@ impl LoadableComponent for GuestPanelComp {
         Self {
             state: LoadableComponentState::new(),
             store: Store::with_extract_key(|entry: &GuestEntry| entry.key()),
-            tree_columns: tree_columns(ctx.link().clone(), tree_store.clone()),
+            tree_columns: tree_columns(ctx.link().clone(), tree_store.clone(), acl_context.clone()),
             tree_store,
-            flat_columns: flat_columns(ctx.link().clone()),
+            flat_columns: flat_columns(ctx.link().clone(), acl_context.clone()),
             selection: Selection::new(),
             filter: String::new(),
             view_mode: PersistentState::new(StorageLocation::local("VirtualGuestsViewMode")),
@@ -468,12 +479,25 @@ impl LoadableComponent for GuestPanelComp {
             pending,
             _pending_handle,
             _pending_observer,
+            acl_context,
+            _acl_handle: acl_handle,
+            refresh_after_tag_edit: false,
         }
     }
 
     fn update(&mut self, ctx: &LoadableComponentContext<Self>, msg: Self::Message) -> bool {
         match msg {
+            Msg::UpdateAcl(acl_context) => {
+                self.flat_columns = flat_columns(ctx.link().clone(), acl_context.clone());
+                self.tree_columns = tree_columns(
+                    ctx.link().clone(),
+                    self.tree_store.clone(),
+                    acl_context.clone(),
+                );
+                self.acl_context = acl_context;
+            }
             Msg::LoadFinished(remotes) => {
+                self.refresh_after_tag_edit = false;
                 self.remote_count = remotes.len();
                 self.load_count = self.load_count.wrapping_add(1);
                 let refresh_ips = self.load_count % IP_REFRESH_LOADS == 0;
@@ -564,6 +588,23 @@ impl LoadableComponent for GuestPanelComp {
                 self.store.set_data(entries);
                 // a finished creation should surface the real guest right away
                 ctx.link().send_reload();
+            }
+            Msg::TagsUpdated(key, tags) => {
+                self.refresh_after_tag_edit = true;
+                let mut entries = self.store.read().data().to_vec();
+                if let Some(entry) = entries.iter_mut().find(|entry| entry.key() == key) {
+                    match &mut entry.resource {
+                        Resource::PveQemu(resource) => resource.tags = tags,
+                        Resource::PveLxc(resource) => resource.tags = tags,
+                        _ => return false,
+                    }
+                }
+                if *self.view_mode == ViewMode::Tree {
+                    self.tree_store
+                        .write()
+                        .update_root_tree(build_guest_tree(&entries, false));
+                }
+                self.store.set_data(entries);
             }
             Msg::GuestAction(action, key) => {
                 let Some(entry) = self.store.read().lookup_record(&key).cloned() else {
@@ -838,6 +879,51 @@ impl LoadableComponent for GuestPanelComp {
         match view_state {
             ViewState::CreateQemu => Some(self.create_qemu_dialog(ctx)),
             ViewState::CreateLxc => Some(self.create_lxc_dialog(ctx)),
+            ViewState::EditTags(key) => {
+                let entry = self.store.read().lookup_record(key).cloned()?;
+                if entry.pending.is_some() || !can_edit_guest_tags(&self.acl_context, &entry) {
+                    return None;
+                }
+                let guest_type = match entry.guest_type() {
+                    GuestType::Qemu => "qemu",
+                    GuestType::Lxc => "lxc",
+                };
+                let url = format!(
+                    "/pve/remotes/{}/{}/{}/config?node={}",
+                    proxmox_yew_comp::percent_encoding::percent_encode_component(&entry.remote),
+                    guest_type,
+                    entry.vmid(),
+                    proxmox_yew_comp::percent_encoding::percent_encode_component(entry.node()),
+                );
+                Some(
+                    EditWindow::new(tr!("Edit Tags - {0}", render_resource_name(&entry.resource, true)))
+                        .loader((load_guest_tags, url.clone()))
+                        .renderer(|_: &FormContext| {
+                            InputPanel::new()
+                                .padding(4)
+                                .with_field(tr!("Tags"), Field::new().name("tags"))
+                                .into()
+                        })
+                        .on_submit({
+                            let link = ctx.link().clone();
+                            let key = key.clone();
+                            move |form: FormContext| {
+                                let url = url.clone();
+                                let link = link.clone();
+                                let key = key.clone();
+                                let data = guest_tags_payload(form.get_submit_data());
+                                let tags = normalize_guest_tags(data["tags"].as_str().unwrap_or(""));
+                                async move {
+                                    proxmox_yew_comp::http_put::<()>(&url, Some(data)).await?;
+                                    link.send_message(Msg::TagsUpdated(key, tags));
+                                    Ok(())
+                                }
+                            }
+                        })
+                        .on_done(ctx.link().change_view_callback(|_| None))
+                        .into(),
+                )
+            }
             ViewState::Confirm(action, key) => {
                 let label = self
                     .store
@@ -971,11 +1057,14 @@ impl LoadableComponent for GuestPanelComp {
         let link = ctx.link().clone();
         // while a creation is in flight, bypass the server's resource cache so the
         // placeholder row is replaced by the real guest as soon as possible
-        let max_age = self
-            .pending
-            .as_ref()
-            .is_some_and(|pending| !pending.list().is_empty())
-            .then_some(PENDING_MAX_AGE_S);
+        let max_age = if self.refresh_after_tag_edit {
+            Some(0)
+        } else {
+            self.pending
+                .as_ref()
+                .is_some_and(|pending| !pending.list().is_empty())
+                .then_some(PENDING_MAX_AGE_S)
+        };
         Box::pin(async move {
             // Fetch all resources and filter to guests client-side (below). We
             // deliberately avoid a `search` filter like "type:qemu type:lxc": the
@@ -1801,8 +1890,75 @@ fn guest_actions(link: &LoadableComponentScope<GuestPanelComp>, entry: &GuestEnt
         .into()
 }
 
+async fn load_guest_tags(
+    url: String,
+) -> Result<proxmox_client::ApiResponseData<serde_json::Value>, Error> {
+    let mut response = proxmox_yew_comp::http_get_full::<serde_json::Value>(
+        &url,
+        Some(serde_json::json!({ "state": "pending" })),
+    )
+    .await?;
+    response.data = serde_json::json!({
+        "tags": response.data["tags"].as_str().unwrap_or(""),
+        "digest": response.data["digest"],
+    });
+    Ok(response)
+}
+
+fn guest_tags_payload(data: serde_json::Value) -> serde_json::Value {
+    let tags = normalize_guest_tags(data["tags"].as_str().unwrap_or(""));
+    let mut payload = if tags.is_empty() {
+        serde_json::json!({ "delete": "tags" })
+    } else {
+        serde_json::json!({ "tags": tags.join(";") })
+    };
+    if let Some(digest) = data["digest"].as_str() {
+        payload["digest"] = digest.into();
+    }
+    payload
+}
+
+fn normalize_guest_tags(value: &str) -> Vec<String> {
+    value
+        .split(';')
+        .map(str::trim)
+        .filter(|tag| !tag.is_empty())
+        .map(str::to_string)
+        .collect()
+}
+
+fn can_edit_guest_tags(acl: &AclContext, entry: &GuestEntry) -> bool {
+    acl.check_privs(
+        &["resource", &entry.remote, "guest", &entry.vmid().to_string()],
+        PRIV_RESOURCE_MANAGE,
+    )
+}
+
+fn guest_tags(
+    link: &LoadableComponentScope<GuestPanelComp>,
+    entry: &GuestEntry,
+    acl: &AclContext,
+) -> Html {
+    let key = entry.key();
+    let link = link.clone();
+    Row::new()
+        .class(AlignItems::Center)
+        .with_child(render_guest_tags(entry.tags()))
+        .gap(2)
+        .with_optional_child((entry.pending.is_none() && can_edit_guest_tags(acl, entry)).then(|| {
+            Tooltip::new(
+                ActionIcon::new("fa fa-fw fa-pencil")
+                    .aria_label(tr!("Edit Tags"))
+                    .on_activate(move |_| link.change_view(Some(ViewState::EditTags(key.clone())))),
+            )
+            .tip(tr!("Edit Tags"))
+        }))
+        .into()
+}
+
 fn flat_columns(
     link: LoadableComponentScope<GuestPanelComp>,
+    acl: AclContext,
 ) -> Rc<Vec<DataTableHeader<GuestEntry>>> {
     Rc::new(vec![
         DataTableColumn::new(tr!("Name"))
@@ -1839,7 +1995,10 @@ fn flat_columns(
             .into(),
         DataTableColumn::new(tr!("Tags"))
             .flex(1)
-            .render(|entry: &GuestEntry| render_guest_tags(entry.tags()).into())
+            .render({
+                let link = link.clone();
+                move |entry: &GuestEntry| guest_tags(&link, entry, &acl)
+            })
             .into(),
         DataTableColumn::new(tr!("CPU Usage"))
             .width("90px")
@@ -1866,6 +2025,7 @@ fn flat_columns(
 fn tree_columns(
     link: LoadableComponentScope<GuestPanelComp>,
     store: TreeStore<GuestTreeNode>,
+    acl: AclContext,
 ) -> Rc<Vec<DataTableHeader<GuestTreeNode>>> {
     Rc::new(vec![
         DataTableColumn::new(tr!("Name"))
@@ -1909,9 +2069,12 @@ fn tree_columns(
             .into(),
         DataTableColumn::new(tr!("Tags"))
             .flex(1)
-            .render(|node: &GuestTreeNode| match node {
-                GuestTreeNode::Guest(entry) => render_guest_tags(entry.tags()).into(),
-                _ => html! {},
+            .render({
+                let link = link.clone();
+                move |node: &GuestTreeNode| match node {
+                    GuestTreeNode::Guest(entry) => guest_tags(&link, entry, &acl),
+                    _ => html! {},
+                }
             })
             .into(),
         DataTableColumn::new(tr!("CPU Usage"))
@@ -1951,4 +2114,45 @@ fn tree_columns(
             })
             .into(),
     ])
+}
+
+#[cfg(test)]
+mod guest_tags_tests {
+    use super::{guest_tags_payload, normalize_guest_tags};
+
+    #[test]
+    fn payload_only_updates_tags_and_preserves_digest() {
+        assert_eq!(
+            guest_tags_payload(serde_json::json!({
+                "tags": " prod ; web-01; ",
+                "digest": "config-digest",
+                "memory": 4096,
+            })),
+            serde_json::json!({ "tags": "prod;web-01", "digest": "config-digest" }),
+        );
+    }
+
+    #[test]
+    fn empty_payload_deletes_tags() {
+        assert_eq!(
+            guest_tags_payload(serde_json::json!({ "tags": " ; " })),
+            serde_json::json!({ "delete": "tags" }),
+        );
+    }
+
+    #[test]
+    fn preserves_tag_names_and_order() {
+        assert_eq!(normalize_guest_tags("prod;Linux;web-01"), vec!["prod", "Linux", "web-01"]);
+    }
+
+    #[test]
+    fn trims_whitespace_and_ignores_empty_tags() {
+        assert_eq!(normalize_guest_tags(" ; prod ;; web-01; "), vec!["prod", "web-01"]);
+    }
+
+    #[test]
+    fn empty_input_removes_all_tags() {
+        assert!(normalize_guest_tags("").is_empty());
+        assert!(normalize_guest_tags(" ; ; ").is_empty());
+    }
 }
