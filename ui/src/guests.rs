@@ -1894,7 +1894,7 @@ async fn load_guest_tags(
     url: AttrValue,
 ) -> Result<proxmox_client::ApiResponseData<serde_json::Value>, Error> {
     let mut response = proxmox_yew_comp::http_get_full::<serde_json::Value>(
-        &url,
+        url.as_str(),
         Some(serde_json::json!({ "state": "pending" })),
     )
     .await?;
