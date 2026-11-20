@@ -889,11 +889,10 @@ impl LoadableComponent for GuestPanelComp {
                     GuestType::Lxc => "lxc",
                 };
                 let url = format!(
-                    "/pve/remotes/{}/{}/{}/config?node={}",
+                    "/pve/remotes/{}/{}/{}/config",
                     proxmox_yew_comp::percent_encoding::percent_encode_component(&entry.remote),
                     guest_type,
                     entry.vmid(),
-                    proxmox_yew_comp::percent_encoding::percent_encode_component(entry.node()),
                 );
                 Some(
                     EditWindow::new(tr!("Edit Tags - {0}", render_resource_name(&entry.resource, true)))
